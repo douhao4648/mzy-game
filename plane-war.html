@@ -24,16 +24,37 @@ onkeydown = e => {
   if ((e.key === 'y' || e.key === 'Y') && !e.repeat) weapon = (weapon + 1) % 7; // Y 切换弹种
   if (e.key === '+' || e.key === '=') espd = Math.min(espd + 0.2, 5); // 加号加速敌军
   if (e.key === '-' || e.key === '_') espd = Math.max(espd - 0.2, 0.2); // 减号减速敌军
-  if ((e.key === 'u' || e.key === 'U') && !e.repeat && ultCd <= 0 && !over) { laser = 40; ultCd = 300; } // U 大招
+  if ((e.key === 'u' || e.key === 'U') && !e.repeat && ultCd <= 0 && !over) { laser = 40; ultCd = ultHalf ? 150 : 300; } // U 大招
   if ((e.key === 'i' || e.key === 'I') && !e.repeat && !over && escorts.length < 4) // I 呼叫护卫机,缺几补几,最多4架
     for (let n = Math.min(2, 4 - escorts.length); n > 0; n--)
       escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: (2 - n) * 9 });
+  if (e.key === '0' && !e.repeat && hasShield && !over) shieldOn = !shieldOn; // 0 开关护盾
   keys[e.key] = true;
 };
 onkeyup = e => keys[e.key] = false;
 
 const player = { x: 185, y: 520, w: 30, h: 30, cd: 0 };
-let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1;
+let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, banked = false, ultHalf = false, hasShield = false, shieldOn = false;
+// 积分:游戏结束时把本局得分累计进来,持久化到 localStorage;buffs 为商城购买的增益,开局生效后清空
+let points = +(localStorage.getItem('pw_points') || 0);
+let buffs = Object.assign({ hp: 0, ult: 0, escort: 0, shield: 0 }, JSON.parse(localStorage.getItem('pw_buffs') || '{}'));
+const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); };
+// 商城商品:价格 + 购买效果
+const SHOP = [
+  { name: '生命 +10', cost: 100, buy: () => buffs.hp++ },
+  { name: '大招冷却减半', cost: 200, buy: () => buffs.ult++ },
+  { name: '开局护卫机 +2', cost: 300, buy: () => buffs.escort++ },
+  { name: '护盾 (按0开关)', cost: 200, buy: () => buffs.shield++ },
+];
+// 开局:清场 + 应用已购增益(增益消耗掉)
+function startGame() {
+  bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; hp = 30 + buffs.hp * 10; laser = 0; ultCd = 0; ultHalf = buffs.ult > 0;
+  hasShield = buffs.shield > 0; shieldOn = false;
+  for (let n = Math.min(buffs.escort * 2, 4); n > 0; n--) escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: n * 9 });
+  buffs = { hp: 0, ult: 0, escort: 0, shield: 0 }; save();
+  banked = false; shop = false; menu = false; over = false;
+  startIntro();
+}
 // 护卫机编队位:相对玩家的偏移
 const ESC_POS = [{ dx: -50, dy: 40 }, { dx: 50, dy: 40 }, { dx: -95, dy: 75 }, { dx: 95, dy: 75 }];
 // 难度:敌速倍率 + 开火概率 + 敌弹速度
@@ -56,13 +77,19 @@ c.addEventListener('click', e => {
   if (!menu && !over) return;
   const r = c.getBoundingClientRect();
   const mx = (e.clientX - r.left) * 400 / r.width, my = (e.clientY - r.top) * 600 / r.height;
+  if (shop) { // 商城内:点商品购买,点返回回菜单
+    if (mx >= 140 && mx <= 260 && my >= 520 && my <= 560) { shop = false; return; }
+    SHOP.forEach((it, i) => {
+      const by = 180 + i * 70;
+      if (mx >= 60 && mx <= 340 && my >= by && my <= by + 50 && points >= it.cost) { points -= it.cost; it.buy(); save(); }
+    });
+    return;
+  }
+  // 菜单/结束页:商城入口按钮
+  if (mx >= 140 && mx <= 260 && my >= 420 && my <= 464) { shop = true; menu = true; return; }
   DIFFS.forEach((d, i) => {
     const bx = 40 + i * 110;
-    if (mx >= bx && mx <= bx + 100 && my >= 350 && my <= 394) {
-      diff = i;
-      bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; hp = 30; laser = 0; ultCd = 0;
-      startIntro(); menu = false; over = false;
-    }
+    if (mx >= bx && mx <= bx + 100 && my >= 350 && my <= 394) { diff = i; startGame(); }
   });
 });
 // 星空背景:远近两层星星,向下滚动模拟飞行
@@ -110,22 +137,51 @@ function hit(a, b) {
 }
 
 function loop() {
-  if (menu) { // 主菜单:选择难度
+  if (menu) {
     ctx.clearRect(0, 0, 400, 600);
+    ctx.textAlign = 'left'; ctx.font = '16px sans-serif'; ctx.fillStyle = '#fa0';
+    ctx.fillText('积分: ' + points, 10, 25); // 左上角显示剩余积分
+    if (shop) { // 积分商城
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff'; ctx.font = '30px sans-serif';
+      ctx.fillText('积分商城', 200, 100);
+      ctx.font = '16px sans-serif';
+      SHOP.forEach((it, i) => {
+        const by = 180 + i * 70;
+        ctx.fillStyle = points >= it.cost ? '#345' : '#222';
+        ctx.fillRect(60, by, 280, 50);
+        ctx.fillStyle = points >= it.cost ? '#fff' : '#666';
+        ctx.fillText(it.name + '  —  ' + it.cost + ' 积分', 200, by + 32);
+      });
+      ctx.fillStyle = '#543'; ctx.fillRect(140, 520, 120, 40);
+      ctx.fillStyle = '#fff'; ctx.fillText('返回', 200, 546);
+      requestAnimationFrame(loop); return;
+    }
+    // 主菜单:选择难度
     ctx.fillStyle = '#fff'; ctx.font = '36px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('马泽一的飞机大战', 200, 200);
     ctx.font = '20px sans-serif';
     ctx.fillText('选择难度', 200, 300);
     drawDiffButtons();
+    ctx.fillStyle = '#345'; ctx.fillRect(140, 420, 120, 44);
+    ctx.fillStyle = '#fff'; ctx.font = '18px sans-serif';
+    ctx.fillText('积分商城', 200, 448);
     requestAnimationFrame(loop); return;
   }
   if (over) {
+    if (!banked) { points += score; banked = true; save(); } // 本局得分计入积分,只记一次
     ctx.fillStyle = '#fff'; ctx.font = '30px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('游戏结束 得分: ' + score, 200, 280);
     ctx.font = '16px sans-serif';
+    ctx.fillStyle = '#fa0';
+    ctx.fillText('积分: ' + points, 200, 250);
+    ctx.fillStyle = '#fff';
     ctx.fillText('按回车重新开始,或点击按钮换难度', 200, 320);
     drawDiffButtons();
-    if (keys['Enter']) { bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; hp = 30; laser = 0; startIntro(); over = false; }
+    ctx.fillStyle = '#345'; ctx.fillRect(140, 420, 120, 44);
+    ctx.fillStyle = '#fff'; ctx.font = '18px sans-serif';
+    ctx.fillText('积分商城', 200, 448);
+    if (keys['Enter']) startGame();
     requestAnimationFrame(loop); return;
   }
   frame++;
@@ -218,7 +274,7 @@ function loop() {
   ebullets = ebullets.filter(b => {
     if (b.y > 640) return false;
     if (hit(b, player)) {
-      if (inv <= 0 && intro <= 0) { hp--; if (hp <= 0) over = true; else startIntro(); }
+      if (inv <= 0 && intro <= 0 && !shieldOn) { hp--; if (hp <= 0) over = true; else startIntro(); }
       return false;
     }
     return true;
@@ -240,7 +296,7 @@ function loop() {
       return false;
     }
     if (hit(player, e)) {
-      if (inv <= 0) {
+      if (inv <= 0 && !shieldOn) {
         hp--;
         if (hp <= 0) { over = true; } else { startIntro(); } // 扣血后翻滚入场,期间无敌
       }
@@ -293,6 +349,11 @@ function loop() {
     const s = 1 + 24 * (1 - p) * (1 - p); // 25倍大急速拉远 → 正常
     drawPlane(entry.x + (player.x - entry.x) * p, entry.y + (player.y - entry.y) * p, '#4f4', false, s * Math.cos(p * Math.PI * 2), s);
   } else if (inv <= 0 || inv % 10 < 5) drawPlane(player.x, player.y, '#4f4', false); // 无敌时闪烁
+  if (shieldOn) { // 护盾:蓝色光圈
+    ctx.strokeStyle = '#4af'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(player.x + 15, player.y + 15, 26, 0, 7); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
   escorts.forEach(g => drawPlane(g.x, g.y, '#4f4', false, 0.7));
   bullets.forEach(b => {
     if (b.sp) { // 分裂弹:紫色圆珠
@@ -331,6 +392,7 @@ function loop() {
   ctx.fillText('敌速: x' + espd.toFixed(1) + ' (按+/-调整)', 10, 65);
   ctx.fillText(ultCd > 0 ? '大招冷却: ' + Math.ceil(ultCd / 60) + '秒' : '大招就绪 (按U)', 10, 85);
   ctx.fillText('难度: ' + DIFFS[diff].name, 10, 105);
+  if (hasShield) ctx.fillText('护盾: ' + (shieldOn ? '开' : '关') + ' (按0切换)', 10, 125);
   ctx.textAlign = 'right';
   ctx.fillStyle = '#fa0'; ctx.fillText('☀'.repeat(Math.floor(hp / 10)), 390, 25);
   ctx.fillStyle = '#f44'; ctx.fillText('♥'.repeat(hp % 10), 390 - ctx.measureText('☀'.repeat(Math.floor(hp / 10))).width, 25);
