@@ -30,7 +30,7 @@ onkeydown = e => {
 onkeyup = e => keys[e.key] = false;
 
 const player = { x: 185, y: 520, w: 30, h: 30, cd: 0 };
-let bullets = [], enemies = [], booms = [], score = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60;
+let bullets = [], enemies = [], booms = [], score = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 };
 // 星空背景:远近两层星星,向下滚动模拟飞行
 const stars = Array.from({ length: 80 }, () => ({
   x: Math.random() * 400, y: Math.random() * 600,
@@ -38,13 +38,12 @@ const stars = Array.from({ length: 80 }, () => ({
 }));
 const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹'];
 
-// 画一架 30x30 的小飞机,down=true 时机头朝下(敌机),scale/rot 用于入场动画
-function drawPlane(x, y, color, down, scale, rot) {
+// 画一架 30x30 的小飞机,down=true 时机头朝下(敌机),sx/sy 缩放用于入场动画
+function drawPlane(x, y, color, down, sx, sy) {
   ctx.save();
   ctx.translate(x + 15, y + 15);
   if (down) ctx.rotate(Math.PI);
-  if (rot) ctx.rotate(rot);
-  if (scale) ctx.scale(scale, scale);
+  if (sx !== undefined) ctx.scale(sx, sy === undefined ? sx : sy);
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.moveTo(0, -15);            // 机头
@@ -63,6 +62,15 @@ function drawPlane(x, y, color, down, scale, rot) {
   ctx.restore();
 }
 
+// 入场:随机从左、右、下三个方向飞入
+function startIntro() {
+  intro = 60; inv = 90;
+  const side = Math.floor(Math.random() * 3);
+  entry = side === 0 ? { x: -80, y: 30 + Math.random() * 180 }
+        : side === 1 ? { x: 480, y: 30 + Math.random() * 180 }
+        : { x: player.x, y: 650 };
+}
+
 function hit(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
@@ -73,7 +81,7 @@ function loop() {
     ctx.fillText('游戏结束 得分: ' + score, 200, 280);
     ctx.font = '16px sans-serif';
     ctx.fillText('按回车重新开始', 200, 320);
-    if (keys['Enter']) { bullets = []; enemies = []; booms = []; score = 0; hp = 30; inv = 90; laser = 0; intro = 60; over = false; }
+    if (keys['Enter']) { bullets = []; enemies = []; booms = []; score = 0; hp = 30; laser = 0; startIntro(); over = false; }
     requestAnimationFrame(loop); return;
   }
   frame++;
@@ -146,7 +154,7 @@ function loop() {
     if (hit(player, e)) {
       if (inv <= 0) {
         hp--;
-        if (hp <= 0) { over = true; } else { inv = 90; intro = 60; } // 扣血后翻滚入场,期间无敌
+        if (hp <= 0) { over = true; } else { startIntro(); } // 扣血后翻滚入场,期间无敌
       }
       return false;
     }
@@ -191,10 +199,11 @@ function loop() {
     ctx.fillRect(bx2 - 5, 0, 10, 600);
   }
   inv--;
-  if (intro > 0) { // 入场动画:从屏幕下方飞来,由大变小,翻滚两圈
+  if (intro > 0) { // 入场动画:由近到远,翻转一次后落位
     intro--;
     const p = 1 - intro / 60;
-    drawPlane(player.x, 650 + (player.y - 650) * p, '#4f4', false, 3 - 2 * p, (1 - p) * Math.PI * 4);
+    const s = 1 + 24 * (1 - p) * (1 - p); // 25倍大急速拉远 → 正常
+    drawPlane(entry.x + (player.x - entry.x) * p, entry.y + (player.y - entry.y) * p, '#4f4', false, s * Math.cos(p * Math.PI * 2), s);
   } else if (inv <= 0 || inv % 10 < 5) drawPlane(player.x, player.y, '#4f4', false); // 无敌时闪烁
   bullets.forEach(b => {
     if (b.m) { // 巡航导弹:橙色弹体 + 红色弹头
@@ -230,6 +239,7 @@ function loop() {
 
   requestAnimationFrame(loop);
 }
+startIntro();
 loop();
 </script>
 </body>
