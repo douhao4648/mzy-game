@@ -5,16 +5,23 @@
 <title>飞机大战</title>
 <style>
   body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
-  canvas { background: #001122; }
+  canvas { background: #050818; }
 </style>
 </head>
 <body>
 <canvas id="c" width="400" height="600"></canvas>
 <script>
 const c = document.getElementById('c'), ctx = c.getContext('2d');
+// 等比放大到窗口最大
+function fit() {
+  const s = Math.min(innerWidth / 400, innerHeight / 600);
+  c.style.width = 400 * s + 'px';
+  c.style.height = 600 * s + 'px';
+}
+onresize = fit; fit();
 const keys = {};
 onkeydown = e => {
-  if ((e.key === 'y' || e.key === 'Y') && !e.repeat) weapon = (weapon + 1) % 3; // Y 切换弹种
+  if ((e.key === 'y' || e.key === 'Y') && !e.repeat) weapon = (weapon + 1) % 5; // Y 切换弹种
   if (e.key === '+' || e.key === '=') espd = Math.min(espd + 0.2, 5); // 加号加速敌军
   if (e.key === '-' || e.key === '_') espd = Math.max(espd - 0.2, 0.2); // 减号减速敌军
   if ((e.key === 'u' || e.key === 'U') && !e.repeat && ultCd <= 0 && !over) { laser = 40; ultCd = 300; } // U 大招
@@ -24,7 +31,12 @@ onkeyup = e => keys[e.key] = false;
 
 const player = { x: 185, y: 520, w: 30, h: 30, cd: 0 };
 let bullets = [], enemies = [], booms = [], score = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60;
-const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹'];
+// 星空背景:远近两层星星,向下滚动模拟飞行
+const stars = Array.from({ length: 80 }, () => ({
+  x: Math.random() * 400, y: Math.random() * 600,
+  s: Math.random() * 2 + 0.5, v: Math.random() * 2 + 0.5
+}));
+const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹'];
 
 // 画一架 30x30 的小飞机,down=true 时机头朝下(敌机),scale/rot 用于入场动画
 function drawPlane(x, y, color, down, scale, rot) {
@@ -83,6 +95,12 @@ function loop() {
       } else if (weapon === 2) { // 追踪导弹:自动锁定最近敌机
         bullets.push({ x: player.x + 12, y: player.y - 6, w: 6, h: 12, home: true, vx: 0, vy: -6 });
         player.cd = 12;
+      } else if (weapon === 3) { // 散射弹:扇形三发
+        [-0.3, 0, 0.3].forEach(a => bullets.push({ x: player.x + 12, y: player.y, w: 6, h: 14, vx: Math.sin(a) * 8, vy: -Math.cos(a) * 8 }));
+        player.cd = 14;
+      } else if (weapon === 4) { // 炸弹:随机方向,大范围爆炸
+        bullets.push({ x: player.x + 8, y: player.y, w: 14, h: 14, bomb: true, vx: (Math.random() - 0.5) * 6, vy: -(2 + Math.random() * 3) });
+        player.cd = 40;
       } else {
         bullets.push({ x: player.x + 11, y: player.y, w: 8, h: 20 });
         player.cd = 10;
@@ -104,12 +122,14 @@ function loop() {
         const a = Math.atan2(t.y + 15 - b.y, t.x + 15 - b.x);
         b.vx += Math.cos(a) * 0.8;
         b.vy += Math.sin(a) * 0.8;
+        b.vy = Math.min(b.vy, -1); // 只能前进,不能回退
         const s = Math.hypot(b.vx, b.vy);
         if (s > 7) { b.vx *= 7 / s; b.vy *= 7 / s; } // 限速
         b.x += b.vx; b.y += b.vy;
         return;
       }
     }
+    if (b.vx !== undefined) { b.x += b.vx; b.y += b.vy; return; } // 散射弹:按固定方向飞
     b.y -= 8;
   });
   enemies.forEach(e => e.y += e.v);
@@ -119,7 +139,8 @@ function loop() {
     const bi = bullets.findIndex(b => hit(b, e));
     if (bi >= 0) {
       const b = bullets.splice(bi, 1)[0];
-      if (b.m) booms.push({ x: e.x + 15, y: e.y + 15, r: 90, t: 12 });
+      if (b.m) booms.push({ x: e.x + 15, y: e.y + 15, r: 90, t: 12, t0: 12 });
+      else if (b.bomb) booms.push({ x: e.x + 15, y: e.y + 15, r: 150, t: 18, t0: 18 }); // 炸弹爆炸范围更大
       score += 10; return false;
     }
     if (hit(player, e)) {
@@ -140,23 +161,34 @@ function loop() {
     });
   });
 
-  // 大招:激光从左到右横扫全场
+  // 大招:激光从左右两侧向中间扫荡
   ultCd--;
   if (laser > 0) {
     laser--;
-    const bx = 400 * (1 - laser / 40);
+    const bx1 = 400 * (1 - laser / 40), bx2 = 400 - bx1;
     enemies = enemies.filter(e => {
-      if (Math.abs(e.x + 15 - bx) < 50) { score += 10; return false; }
+      if (Math.abs(e.x + 15 - bx1) < 50 || Math.abs(e.x + 15 - bx2) < 50) { score += 10; return false; }
       return true;
     });
   }
 
   // 绘制
   ctx.clearRect(0, 0, 400, 600);
-  if (laser > 0) { // 大招激光束
-    const bx = 400 * (1 - laser / 40);
-    ctx.fillStyle = 'rgba(0,255,255,0.35)'; ctx.fillRect(bx - 40, 0, 80, 600);
-    ctx.fillStyle = '#aff'; ctx.fillRect(bx - 5, 0, 10, 600);
+  // 星空:大星快、小星慢,滚出底部回顶部
+  stars.forEach(t => {
+    t.y += t.v;
+    if (t.y > 610) { t.y = -5; t.x = Math.random() * 400; }
+    ctx.fillStyle = t.s > 1.5 ? '#fff' : '#889';
+    ctx.fillRect(t.x, t.y, t.s, t.s);
+  });
+  if (laser > 0) { // 大招激光束:左右两道
+    const bx1 = 400 * (1 - laser / 40), bx2 = 400 - bx1;
+    ctx.fillStyle = 'rgba(0,255,255,0.35)';
+    ctx.fillRect(bx1 - 40, 0, 80, 600);
+    ctx.fillRect(bx2 - 40, 0, 80, 600);
+    ctx.fillStyle = '#aff';
+    ctx.fillRect(bx1 - 5, 0, 10, 600);
+    ctx.fillRect(bx2 - 5, 0, 10, 600);
   }
   inv--;
   if (intro > 0) { // 入场动画:从屏幕下方飞来,由大变小,翻滚两圈
@@ -175,13 +207,17 @@ function loop() {
       ctx.fillStyle = '#0ff';
       ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(4, 6); ctx.lineTo(-4, 6); ctx.closePath(); ctx.fill();
       ctx.restore();
+    } else if (b.bomb) { // 炸弹:黑色圆球 + 火花引信
+      ctx.fillStyle = '#333';
+      ctx.beginPath(); ctx.arc(b.x + 7, b.y + 7, 8, 0, 7); ctx.fill();
+      ctx.fillStyle = '#ff0'; ctx.fillRect(b.x + 5, b.y - 5, 4, 5);
     } else {
       ctx.fillStyle = '#ff0'; ctx.fillRect(b.x, b.y, b.w, b.h);
     }
   });
   booms = booms.filter(bm => bm.t-- > 0);
   ctx.strokeStyle = '#fa0';
-  booms.forEach(bm => { ctx.beginPath(); ctx.arc(bm.x, bm.y, bm.r * (1 - bm.t / 12), 0, 7); ctx.stroke(); });
+  booms.forEach(bm => { ctx.beginPath(); ctx.arc(bm.x, bm.y, bm.r * (1 - bm.t / bm.t0), 0, 7); ctx.stroke(); });
   enemies.forEach(e => drawPlane(e.x, e.y, '#f44', true));
   ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('得分: ' + score, 10, 25);
