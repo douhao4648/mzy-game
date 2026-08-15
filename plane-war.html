@@ -21,7 +21,7 @@ function fit() {
 onresize = fit; fit();
 const keys = {};
 onkeydown = e => {
-  if ((e.key === 'y' || e.key === 'Y') && !e.repeat) weapon = (weapon + 1) % 7; // Y 切换弹种
+  if ((e.key === 'y' || e.key === 'Y') && !e.repeat) weapon = (weapon + 1) % (rail ? 8 : 7); // Y 切换弹种
   if (e.key === '+' || e.key === '=') espd = Math.min(espd + 0.2, 5); // 加号加速敌军
   if (e.key === '-' || e.key === '_') espd = Math.max(espd - 0.2, 0.2); // 减号减速敌军
   if ((e.key === 'u' || e.key === 'U') && !e.repeat && ultCd <= 0 && !over) { laser = 40; ultCd = ultHalf ? 150 : 300; } // U 大招
@@ -29,29 +29,37 @@ onkeydown = e => {
     for (let n = Math.min(2, 4 - escorts.length); n > 0; n--)
       escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: (2 - n) * 9 });
   if (e.key === '0' && !e.repeat && hasShield && !over) shieldOn = !shieldOn; // 0 开关护盾
+  if (e.key === '1' && !e.repeat && hasDouble && !over) doubleOn = !doubleOn; // 1 开关积分双倍
+  if (e.key === '2' && !e.repeat && hasGun && !over) gunOn = !gunOn; // 2 开关机炮
+  if (e.key === '3' && !e.repeat && hasTime && !over) timeFreeze = !timeFreeze; // 3 开关时间暂停
   keys[e.key] = true;
 };
 onkeyup = e => keys[e.key] = false;
 
 const player = { x: 185, y: 520, w: 30, h: 30, cd: 0 };
-let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, ultHalf = false, hasShield = false, shieldOn = false;
+let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, kills = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, shopScroll = 0, ultHalf = false, hasShield = false, shieldOn = false, hasDouble = false, doubleOn = false, hasGun = false, gunOn = false, gunCd = 0, hasTime = false, timeFreeze = 0;
 // 积分:击杀得分实时累计,持久化到 localStorage;buffs 为商城购买的增益,开局生效后清空
 let points = +(localStorage.getItem('pw_points') || 0);
-let buffs = Object.assign({ hp: 0, ult: 0, escort: 0, shield: 0 }, JSON.parse(localStorage.getItem('pw_buffs') || '{}'));
-const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); };
+let rail = +(localStorage.getItem('pw_rail') || 0); // 电磁炮是否已解锁(永久)
+let buffs = Object.assign({ hp: 0, ult: 0, escort: 0, shield: 0, double: 0, gun: 0, time: 0 }, JSON.parse(localStorage.getItem('pw_buffs') || '{}'));
+const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); localStorage.setItem('pw_rail', rail); };
 // 商城商品:价格 + 购买效果
 const SHOP = [
   { name: '生命 +10', cost: 100, buy: () => buffs.hp++ },
   { name: '大招冷却减半', cost: 200, buy: () => buffs.ult++ },
   { name: '开局护卫机 +2', cost: 300, buy: () => buffs.escort++ },
   { name: '护盾 (按0开关)', cost: 200, buy: () => buffs.shield++ },
+  { name: '积分双倍 (按1开关)', cost: 100, buy: () => buffs.double++ },
+  { name: '机炮 (按2开关)', cost: 300, buy: () => buffs.gun++ },
+  { name: '电磁炮 (弹种)', cost: 50, buy: () => rail = 1 },
+  { name: '时间暂停 (按3触发)', cost: 10000, buy: () => buffs.time++ },
 ];
 // 开局:清场 + 应用已购增益(增益消耗掉)
 function startGame() {
-  bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; hp = 30 + buffs.hp * 10; laser = 0; ultCd = 0; ultHalf = buffs.ult > 0;
-  hasShield = buffs.shield > 0; shieldOn = false;
+  bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; kills = 0; hp = 30 + buffs.hp * 10; laser = 0; ultCd = 0; ultHalf = buffs.ult > 0;
+  hasShield = buffs.shield > 0; shieldOn = false; hasDouble = buffs.double > 0; doubleOn = false; hasGun = buffs.gun > 0; gunOn = false; gunCd = 0; hasTime = buffs.time > 0; timeFreeze = 0;
   for (let n = Math.min(buffs.escort * 2, 4); n > 0; n--) escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: n * 9 });
-  buffs = { hp: 0, ult: 0, escort: 0, shield: 0 }; save();
+  buffs = { hp: 0, ult: 0, escort: 0, shield: 0, double: 0, gun: 0, time: 0 }; save();
   shop = false; menu = false; over = false;
   startIntro();
 }
@@ -59,9 +67,9 @@ function startGame() {
 const ESC_POS = [{ dx: -50, dy: 40 }, { dx: 50, dy: 40 }, { dx: -95, dy: 75 }, { dx: 95, dy: 75 }];
 // 难度:敌速倍率 + 开火概率 + 敌弹速度
 const DIFFS = [
-  { name: '简单', spd: 0.7, fire: 0.004, bv: 3 },
-  { name: '普通', spd: 1,   fire: 0.008, bv: 5 },
-  { name: '困难', spd: 1.5, fire: 0.015, bv: 7 },
+  { name: '简单', spd: 0.7, fire: 0.004, bv: 3, kills: 200 },
+  { name: '普通', spd: 1,   fire: 0.008, bv: 5, kills: 200 },
+  { name: '困难', spd: 1.5, fire: 0.015, bv: 7, kills: 200 },
 ];
 // 三个难度按钮的绘制与点击判定共用同一坐标
 function drawDiffButtons() {
@@ -80,24 +88,31 @@ c.addEventListener('click', e => {
   if (shop) { // 商城内:点商品购买,点返回回菜单
     if (mx >= 140 && mx <= 260 && my >= 520 && my <= 560) { shop = false; return; }
     SHOP.forEach((it, i) => {
-      const by = 180 + i * 70;
+      const by = 120 + i * 80 - shopScroll;
       if (mx >= 60 && mx <= 340 && my >= by && my <= by + 50 && points >= it.cost) { points -= it.cost; it.buy(); save(); }
     });
     return;
   }
   // 菜单/结束页:商城入口按钮
-  if (mx >= 140 && mx <= 260 && my >= 420 && my <= 464) { shop = true; menu = true; return; }
+  if (mx >= 140 && mx <= 260 && my >= 420 && my <= 464) { shop = true; menu = true; shopScroll = 0; return; }
   DIFFS.forEach((d, i) => {
     const bx = 40 + i * 110;
     if (mx >= bx && mx <= bx + 100 && my >= 350 && my <= 394) { diff = i; startGame(); }
   });
 });
+// 商城:滚轮滚动商品列表
+c.addEventListener('wheel', e => {
+  if (shop) {
+    e.preventDefault();
+    shopScroll = Math.max(0, Math.min(shopScroll + e.deltaY, Math.max(0, SHOP.length * 80 - 400)));
+  }
+}, { passive: false });
 // 星空背景:远近两层星星,向下滚动模拟飞行
 const stars = Array.from({ length: 80 }, () => ({
   x: Math.random() * 400, y: Math.random() * 600,
   s: Math.random() * 2 + 0.5, v: Math.random() * 2 + 0.5
 }));
-const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹', '激光', '分裂弹'];
+const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹', '激光', '分裂弹', '电磁炮'];
 
 // 画一架 30x30 的小飞机,down=true 时机头朝下(敌机),sx/sy 缩放用于入场动画
 function drawPlane(x, y, color, down, sx, sy) {
@@ -136,6 +151,19 @@ function hit(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
+// 击杀计分:积分双倍开启时得分与积分都翻倍
+function gain(s, p) { score += doubleOn ? s * 2 : s; points += doubleOn ? p * 2 : p; save(); }
+// 击杀普通敌机:计分并累计,达到阈值召唤 BOSS
+function killEnemy() {
+  gain(10, 10);
+  kills++;
+}
+// BOSS 血量随难度与得分增长
+function spawnBoss() {
+  const hp = 30 + diff * 30 + Math.floor(score / 5);
+  enemies.push({ x: 100, y: -90, w: 90, h: 90, boss: true, hp, maxHp: hp, fc: 40, seed: Math.random() * 10 });
+}
+
 function loop() {
   if (menu) {
     ctx.clearRect(0, 0, 400, 600);
@@ -147,7 +175,8 @@ function loop() {
       ctx.fillText('积分商城', 200, 100);
       ctx.font = '16px sans-serif';
       SHOP.forEach((it, i) => {
-        const by = 180 + i * 70;
+        const by = 120 + i * 80 - shopScroll;
+        if (by < 100 || by > 470) return; // 可视区外不画
         ctx.fillStyle = points >= it.cost ? '#345' : '#222';
         ctx.fillRect(60, by, 280, 50);
         ctx.fillStyle = points >= it.cost ? '#fff' : '#666';
@@ -216,6 +245,9 @@ function loop() {
       } else if (weapon === 6) { // 分裂弹:飞行一段后裂成扇形三发
         bullets.push({ x: player.x + 11, y: player.y, w: 8, h: 14, sp: true, t: 25 });
         player.cd = 22;
+      } else if (weapon === 7) { // 电磁炮:高速贯穿弹
+        bullets.push({ x: player.x + 11, y: player.y, w: 10, h: 30, rail: true });
+        player.cd = 30;
       } else {
         bullets.push({ x: player.x + 11, y: player.y, w: 8, h: 20 });
         player.cd = 10;
@@ -232,9 +264,15 @@ function loop() {
     g.x = Math.max(0, Math.min(370, g.x));
     if (intro <= 0 && --g.cd <= 0) { bullets.push({ x: g.x + 11, y: g.y, w: 8, h: 20 }); g.cd = 18; }
   });
+  // 机炮:按2开关,两个机翼各一炮自动射击
+  if (gunOn && intro <= 0 && --gunCd <= 0) {
+    gunCd = 12;
+    bullets.push({ x: player.x - 4, y: player.y + 10, w: 8, h: 20 });  // 左翼
+    bullets.push({ x: player.x + 26, y: player.y + 10, w: 8, h: 20 }); // 右翼
+  }
 
   // 生成敌机
-  if (frame % 40 === 0)
+  if (timeFreeze <= 0 && frame % 40 === 0 && !enemies.some(e => e.boss))
     enemies.push({ x: Math.random() * 370, y: -30, w: 30, h: 30, v: (2 + Math.random() * 2) * espd * DIFFS[diff].spd });
 
   // 移动与碰撞
@@ -263,14 +301,26 @@ function loop() {
       }
     }
     if (b.vx !== undefined) { b.x += b.vx; b.y += b.vy; return; } // 散射弹:按固定方向飞
+    if (b.rail) { b.y -= 16; return; } // 电磁炮:高速贯穿
     b.y -= 8;
   });
   enemies.forEach(e => {
+    if (timeFreeze > 0) return; // 时间暂停:敌机冻结
+    if (e.boss) { // BOSS 进场到 y=80 后左右摆动,三连发
+      e.y = Math.min(e.y + 2, 80);
+      e.x += Math.sin(frame * 0.03 + e.seed) * 2;
+      e.x = Math.max(0, Math.min(400 - e.w, e.x));
+      if (intro <= 0 && --e.fc <= 0) {
+        e.fc = Math.max(20, 45 - diff * 10);
+        [-0.3, 0, 0.3].forEach(a => ebullets.push({ x: e.x + e.w / 2 + a * 40, y: e.y + e.h, w: 8, h: 20 }));
+      }
+      return;
+    }
     e.y += e.v;
     if (intro <= 0 && Math.random() < DIFFS[diff].fire) ebullets.push({ x: e.x + 11, y: e.y + 30, w: 8, h: 20 }); // 随机发射普通子弹
   });
   // 敌机子弹:向下飞,击中玩家扣血
-  ebullets.forEach(b => b.y += DIFFS[diff].bv);
+  if (timeFreeze <= 0) ebullets.forEach(b => b.y += DIFFS[diff].bv);
   ebullets = ebullets.filter(b => {
     if (b.y > 640) return false;
     if (hit(b, player)) {
@@ -285,14 +335,20 @@ function loop() {
     const bi = bullets.findIndex(b => hit(b, e));
     if (bi >= 0) {
       const b = bullets[bi];
-      if (!b.lz) bullets.splice(bi, 1); // 激光贯穿,不消耗
+      if (!b.lz && !b.rail) bullets.splice(bi, 1); // 激光/电磁炮贯穿,不消耗
+      if (e.boss) { // BOSS 扣血不死,重武器伤害更高
+        e.hp -= b.rail ? 20 : b.bomb ? 12 : b.m ? 6 : 2;
+        if (e.hp <= 0) { booms.push({ x: e.x + e.w / 2, y: e.y + e.h / 2, r: 120, t: 24, t0: 24 }); gain(5000, 5000); kills = 0; return false; }
+        return true;
+      }
       if (b.m) booms.push({ x: e.x + 15, y: e.y + 15, r: 90, t: 12, t0: 12 });
       else if (b.bomb) booms.push({ x: e.x + 15, y: e.y + 15, r: 150, t: 18, t0: 18 }); // 炸弹爆炸范围更大
-      score += 10; points += 10; save(); return false; /* 击杀立即入账,刷新不丢 */
+      killEnemy(); return false;
     }
     const gi = escorts.findIndex(g => hit(g, e));
     if (gi >= 0) { // 护卫机撞敌:同归于尽
       escorts.splice(gi, 1);
+      if (e.boss) { e.hp -= 5; return true; } // 撞 BOSS:自毁造成伤害
       return false;
     }
     if (hit(player, e)) {
@@ -300,7 +356,7 @@ function loop() {
         hp--;
         if (hp <= 0) { over = true; } else { startIntro(); } // 扣血后翻滚入场,期间无敌
       }
-      return false;
+      return e.boss; // BOSS 撞到玩家不消失
     }
     return true;
   });
@@ -308,7 +364,8 @@ function loop() {
   // 巡航导弹爆炸:范围杀伤
   booms.forEach(bm => {
     enemies = enemies.filter(e => {
-      if (Math.hypot(e.x + 15 - bm.x, e.y + 15 - bm.y) < bm.r) { score += 10; points += 10; save(); return false; /* 击杀立即入账,刷新不丢 */ }
+      if (e.boss) return true; // BOSS 不吃范围余波,已按直接命中扣血
+      if (Math.hypot(e.x + 15 - bm.x, e.y + 15 - bm.y) < bm.r) { killEnemy(); return false; }
       return true;
     });
   });
@@ -319,13 +376,19 @@ function loop() {
     laser--;
     const bx1 = 400 * (1 - laser / 40), bx2 = 400 - bx1;
     enemies = enemies.filter(e => {
-      if (Math.abs(e.x + 15 - bx1) < 50 || Math.abs(e.x + 15 - bx2) < 50) { score += 10; points += 10; save(); return false; /* 击杀立即入账,刷新不丢 */ }
+      if (Math.abs(e.x + e.w / 2 - bx1) < 50 || Math.abs(e.x + e.w / 2 - bx2) < 50) {
+        if (e.boss) { e.hp -= 10; return true; } // 大招扫射 BOSS:持续高额扣血不死
+        killEnemy(); return false;
+      }
       return true;
     });
   }
+  // 击杀达标后召唤 BOSS(在 enemies 稳定后统一处理,避免 push 到正在 filter 的数组)
+  if (kills >= DIFFS[diff].kills && !enemies.some(e => e.boss)) spawnBoss();
 
   // 绘制
   ctx.clearRect(0, 0, 400, 600);
+  if (timeFreeze > 0) { ctx.fillStyle = 'rgba(0,150,255,0.08)'; ctx.fillRect(0, 0, 400, 600); } // 时间暂停:淡蓝遮罩
   // 星空:大星快、小星慢,滚出底部回顶部
   stars.forEach(t => {
     t.y += t.v;
@@ -355,6 +418,7 @@ function loop() {
     ctx.lineWidth = 1;
   }
   escorts.forEach(g => drawPlane(g.x, g.y, '#4f4', false, 0.7));
+  if (gunOn) { ctx.fillStyle = '#0ff'; ctx.fillRect(player.x - 4, player.y + 6, 8, 10); ctx.fillRect(player.x + 26, player.y + 6, 8, 10); } // 两翼机炮炮管
   bullets.forEach(b => {
     if (b.sp) { // 分裂弹:紫色圆珠
       ctx.fillStyle = '#c0f';
@@ -376,6 +440,9 @@ function loop() {
       ctx.fillStyle = '#333';
       ctx.beginPath(); ctx.arc(b.x + 7, b.y + 7, 8, 0, 7); ctx.fill();
       ctx.fillStyle = '#ff0'; ctx.fillRect(b.x + 5, b.y - 5, 4, 5);
+    } else if (b.rail) { // 电磁炮:蓝色贯穿光柱
+      ctx.fillStyle = 'rgba(100,150,255,0.4)'; ctx.fillRect(b.x - 2, b.y, b.w + 4, b.h);
+      ctx.fillStyle = '#5af'; ctx.fillRect(b.x, b.y, b.w, b.h);
     } else {
       ctx.fillStyle = '#ff0'; ctx.fillRect(b.x, b.y, b.w, b.h);
     }
@@ -385,14 +452,24 @@ function loop() {
   booms = booms.filter(bm => bm.t-- > 0);
   ctx.strokeStyle = '#fa0';
   booms.forEach(bm => { ctx.beginPath(); ctx.arc(bm.x, bm.y, bm.r * (1 - bm.t / bm.t0), 0, 7); ctx.stroke(); });
-  enemies.forEach(e => drawPlane(e.x, e.y, '#f44', true));
+  enemies.forEach(e => {
+    if (e.boss) { // BOSS:放大三倍 + 血条
+      drawPlane(e.x + e.w / 2 - 15, e.y + e.h / 2 - 15, '#f22', true, e.w / 30);
+      ctx.fillStyle = '#333'; ctx.fillRect(e.x, e.y - 16, e.w, 8);
+      ctx.fillStyle = '#f44'; ctx.fillRect(e.x, e.y - 16, e.w * Math.max(0, e.hp) / e.maxHp, 8);
+    } else drawPlane(e.x, e.y, '#f44', true);
+  });
   ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('得分: ' + score, 10, 25);
   ctx.fillText('弹种: ' + WEAPONS[weapon] + ' (按Y切换)', 10, 45);
   ctx.fillText('敌速: x' + espd.toFixed(1) + ' (按+/-调整)', 10, 65);
   ctx.fillText(ultCd > 0 ? '大招冷却: ' + Math.ceil(ultCd / 60) + '秒' : '大招就绪 (按U)', 10, 85);
   ctx.fillText('难度: ' + DIFFS[diff].name, 10, 105);
-  if (hasShield) ctx.fillText('护盾: ' + (shieldOn ? '开' : '关') + ' (按0切换)', 10, 125);
+  ctx.fillText('BOSS: ' + Math.min(kills, DIFFS[diff].kills) + '/' + DIFFS[diff].kills, 10, 125);
+  if (hasShield) ctx.fillText('护盾: ' + (shieldOn ? '开' : '关') + ' (按0切换)', 10, 145);
+  if (hasDouble) ctx.fillText('积分双倍: ' + (doubleOn ? '开' : '关') + ' (按1切换)', 10, 165);
+  if (hasGun) ctx.fillText('机炮: ' + (gunOn ? '开' : '关') + ' (按2切换)', 10, 185);
+  if (hasTime) ctx.fillText('时间暂停: ' + (timeFreeze > 0 ? '冻结中' : '关') + ' (按3开关)', 10, 205);
   ctx.textAlign = 'right';
   ctx.fillStyle = '#fa0'; ctx.fillText('☀'.repeat(Math.floor(hp / 10)), 390, 25);
   ctx.fillStyle = '#f44'; ctx.fillText('♥'.repeat(hp % 10), 390 - ctx.measureText('☀'.repeat(Math.floor(hp / 10))).width, 25);
