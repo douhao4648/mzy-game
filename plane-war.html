@@ -21,7 +21,8 @@ function fit() {
 onresize = fit; fit();
 const keys = {};
 onkeydown = e => {
-  if ((e.key === 'y' || e.key === 'Y') && !e.repeat) weapon = (weapon + 1) % (rail ? 8 : 7); // Y 切换弹种
+  if ((e.key === 'y' || e.key === 'Y') && !e.repeat) // Y 切换弹种,跳过未解锁的
+    do weapon = (weapon + 1) % 9; while ((weapon === 7 && !rail) || (weapon === 8 && !spinOwned));
   if (e.key === '+' || e.key === '=') espd = Math.min(espd + 0.2, 5); // 加号加速敌军
   if (e.key === '-' || e.key === '_') espd = Math.max(espd - 0.2, 0.2); // 减号减速敌军
   if ((e.key === 'u' || e.key === 'U') && !e.repeat && ultCd <= 0 && !over) { laser = 40; ultCd = ultHalf ? 150 : 300; } // U 大招
@@ -37,12 +38,15 @@ onkeydown = e => {
 onkeyup = e => keys[e.key] = false;
 
 const player = { x: 185, y: 520, w: 30, h: 30, cd: 0 };
-let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, kills = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, shopScroll = 0, ultHalf = false, hasShield = false, shieldOn = false, hasDouble = false, doubleOn = false, hasGun = false, gunOn = false, gunCd = 0, hasTime = false, timeFreeze = 0;
+let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, kills = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, shopScroll = 0, ultHalf = false, hasShield = false, shieldOn = false, hasDouble = false, doubleOn = false, hasGun = false, gunOn = false, gunCd = 0, hasTime = false, timeFreeze = 0, spinA = 0;
 // 积分:击杀得分实时累计,持久化到 localStorage;buffs 为商城购买的增益,开局生效后清空
 let points = +(localStorage.getItem('pw_points') || 0);
 let rail = +(localStorage.getItem('pw_rail') || 0); // 电磁炮是否已解锁(永久)
+let spinOwned = +(localStorage.getItem('pw_spin') || 0); // 旋转激光是否已解锁(永久)
+let escortLaser = +(localStorage.getItem('pw_escortlaser') || 0); // 护卫机发射激光是否已解锁(永久)
+const spinOn = () => spinOwned && weapon === 8; // 旋转激光弹种生效中
 let buffs = Object.assign({ hp: 0, ult: 0, escort: 0, shield: 0, double: 0, gun: 0, time: 0 }, JSON.parse(localStorage.getItem('pw_buffs') || '{}'));
-const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); localStorage.setItem('pw_rail', rail); };
+const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); localStorage.setItem('pw_rail', rail); localStorage.setItem('pw_spin', spinOwned); localStorage.setItem('pw_escortlaser', escortLaser); };
 // 商城商品:价格 + 购买效果
 const SHOP = [
   { name: '生命 +10', cost: 100, buy: () => buffs.hp++ },
@@ -53,11 +57,13 @@ const SHOP = [
   { name: '机炮 (按2开关)', cost: 300, buy: () => buffs.gun++ },
   { name: '电磁炮 (弹种)', cost: 50, buy: () => rail = 1 },
   { name: '时间暂停 (按3触发)', cost: 10000, buy: () => buffs.time++ },
+  { name: '旋转激光 (弹种)', cost: 1000, buy: () => spinOwned = 1 },
+  { name: '护卫机发射激光', cost: 500, buy: () => escortLaser = 1 },
 ];
 // 开局:清场 + 应用已购增益(增益消耗掉)
 function startGame() {
   bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; kills = 0; hp = 30 + buffs.hp * 10; laser = 0; ultCd = 0; ultHalf = buffs.ult > 0;
-  hasShield = buffs.shield > 0; shieldOn = false; hasDouble = buffs.double > 0; doubleOn = false; hasGun = buffs.gun > 0; gunOn = false; gunCd = 0; hasTime = buffs.time > 0; timeFreeze = 0;
+  hasShield = buffs.shield > 0; shieldOn = false; hasDouble = buffs.double > 0; doubleOn = false; hasGun = buffs.gun > 0; gunOn = false; gunCd = 0; hasTime = buffs.time > 0; timeFreeze = 0; spinA = 0;
   for (let n = Math.min(buffs.escort * 2, 4); n > 0; n--) escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: n * 9 });
   buffs = { hp: 0, ult: 0, escort: 0, shield: 0, double: 0, gun: 0, time: 0 }; save();
   shop = false; menu = false; over = false;
@@ -112,7 +118,20 @@ const stars = Array.from({ length: 80 }, () => ({
   x: Math.random() * 400, y: Math.random() * 600,
   s: Math.random() * 2 + 0.5, v: Math.random() * 2 + 0.5
 }));
-const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹', '激光', '分裂弹', '电磁炮'];
+const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹', '激光', '分裂弹', '电磁炮', '旋转激光'];
+// 发射弹种:返回冷却帧数,src 为发射源(玩家或护卫机)
+function fireWeapon(w, src) {
+  const x = src.x, y = src.y;
+  if (w === 1) { bullets.push({ x: x + 5, y: y - 10, w: 20, h: 30, m: true }); return 30; } // 巡航导弹
+  if (w === 2) { bullets.push({ x: x + 12, y: y - 6, w: 6, h: 12, home: true, vx: 0, vy: -6 }); return 12; } // 追踪导弹
+  if (w === 3) { [-0.3, 0, 0.3].forEach(a => bullets.push({ x: x + 12, y: y, w: 6, h: 14, vx: Math.sin(a) * 8, vy: -Math.cos(a) * 8 })); return 14; } // 散射弹
+  if (w === 4) { bullets.push({ x: x + 8, y: y, w: 14, h: 14, bomb: true, vx: (Math.random() - 0.5) * 6, vy: -(2 + Math.random() * 3) }); return 40; } // 炸弹
+  if (w === 5) { const b = bullets.find(b => b.lz && b.owner === src); if (b) { b.x = x + 13; b.h = y; b.ttl = 2; } else bullets.push({ x: x + 13, y: 0, w: 4, h: y, lz: true, ttl: 2, owner: src }); return 0; } // 激光:持续刷新光束
+  if (w === 6) { bullets.push({ x: x + 11, y: y, w: 8, h: 14, sp: true, t: 25 }); return 22; } // 分裂弹
+  if (w === 7) { bullets.push({ x: x + 11, y: y, w: 10, h: 30, rail: true }); return 30; } // 电磁炮
+  if (w === 8) return 0; // 旋转激光:无子弹
+  bullets.push({ x: x + 11, y: y, w: 8, h: 20 }); return 10; // 普通子弹
+}
 
 // 画一架 30x30 的小飞机,down=true 时机头朝下(敌机),sx/sy 缩放用于入场动画
 function drawPlane(x, y, color, down, sx, sy) {
@@ -225,44 +244,20 @@ function loop() {
     player.y = Math.max(0, Math.min(570, player.y));
 
     // 射击
-    if (keys[' '] && player.cd <= 0) {
-      if (weapon === 1) { // 巡航导弹:弹体大、射速慢、范围杀伤
-        bullets.push({ x: player.x + 5, y: player.y - 10, w: 20, h: 30, m: true });
-        player.cd = 30;
-      } else if (weapon === 2) { // 追踪导弹:自动锁定最近敌机
-        bullets.push({ x: player.x + 12, y: player.y - 6, w: 6, h: 12, home: true, vx: 0, vy: -6 });
-        player.cd = 12;
-      } else if (weapon === 3) { // 散射弹:扇形三发
-        [-0.3, 0, 0.3].forEach(a => bullets.push({ x: player.x + 12, y: player.y, w: 6, h: 14, vx: Math.sin(a) * 8, vy: -Math.cos(a) * 8 }));
-        player.cd = 14;
-      } else if (weapon === 4) { // 炸弹:随机方向,大范围爆炸
-        bullets.push({ x: player.x + 8, y: player.y, w: 14, h: 14, bomb: true, vx: (Math.random() - 0.5) * 6, vy: -(2 + Math.random() * 3) });
-        player.cd = 40;
-      } else if (weapon === 5) { // 激光:按住空格持续发射,光束跟随飞机,松开即停
-        const b = bullets.find(b => b.lz);
-        if (b) { b.x = player.x + 13; b.h = player.y; b.ttl = 2; } // 刷新存续,跟随位置
-        else bullets.push({ x: player.x + 13, y: 0, w: 4, h: player.y, lz: true, ttl: 2 });
-      } else if (weapon === 6) { // 分裂弹:飞行一段后裂成扇形三发
-        bullets.push({ x: player.x + 11, y: player.y, w: 8, h: 14, sp: true, t: 25 });
-        player.cd = 22;
-      } else if (weapon === 7) { // 电磁炮:高速贯穿弹
-        bullets.push({ x: player.x + 11, y: player.y, w: 10, h: 30, rail: true });
-        player.cd = 30;
-      } else {
-        bullets.push({ x: player.x + 11, y: player.y, w: 8, h: 20 });
-        player.cd = 10;
-      }
-    }
+    if (keys[' '] && player.cd <= 0) player.cd = fireWeapon(weapon, player);
   }
   player.cd--;
 
-  // 护卫机:跟随编队位,自动发射普通子弹
+  // 护卫机:跟随编队位,自动发射子弹(解锁后发射激光)
   escorts.forEach((g, i) => {
     const p = ESC_POS[i];
     g.x += (player.x + p.dx - g.x) * 0.2;
     g.y += (player.y + p.dy - g.y) * 0.2;
     g.x = Math.max(0, Math.min(370, g.x));
-    if (intro <= 0 && --g.cd <= 0) { bullets.push({ x: g.x + 11, y: g.y, w: 8, h: 20 }); g.cd = 18; }
+    if (intro <= 0 && --g.cd <= 0) {
+      if (escortLaser) g.cd = fireWeapon(5, g); // 护卫机发射激光
+      else { bullets.push({ x: g.x + 11, y: g.y, w: 8, h: 20 }); g.cd = 18; }
+    }
   });
   // 机炮:按2开关,两个机翼各一炮自动射击
   if (gunOn && intro <= 0 && --gunCd <= 0) {
@@ -270,6 +265,7 @@ function loop() {
     bullets.push({ x: player.x - 4, y: player.y + 10, w: 8, h: 20 });  // 左翼
     bullets.push({ x: player.x + 26, y: player.y + 10, w: 8, h: 20 }); // 右翼
   }
+  if (spinOn()) spinA += 0.06; // 旋转激光:持续绕机旋转
 
   // 生成敌机
   if (timeFreeze <= 0 && frame % 40 === 0 && !enemies.some(e => e.boss))
@@ -351,6 +347,15 @@ function loop() {
       if (e.boss) { e.hp -= 5; return true; } // 撞 BOSS:自毁造成伤害
       return false;
     }
+    if (spinOn()) { // 旋转激光:敌机中心到光束线段的距离小于半径即命中
+      const cx = player.x + 15, cy = player.y + 15, dx = Math.cos(spinA), dy = Math.sin(spinA);
+      const ex = e.x + e.w / 2, ey = e.y + e.h / 2;
+      const t = Math.max(0, Math.min(140, (ex - cx) * dx + (ey - cy) * dy)); // 投影到线段上
+      if (Math.hypot(ex - (cx + dx * t), ey - (cy + dy * t)) < 20) {
+        if (e.boss) { e.hp -= 2; return true; } // 扫到 BOSS:持续扣血
+        killEnemy(); return false;
+      }
+    }
     if (hit(player, e)) {
       if (inv <= 0 && !shieldOn) {
         hp--;
@@ -416,6 +421,14 @@ function loop() {
     ctx.strokeStyle = '#4af'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(player.x + 15, player.y + 15, 26, 0, 7); ctx.stroke();
     ctx.lineWidth = 1;
+  }
+  if (spinOn() && intro <= 0) { // 旋转激光:红色光束,绕机心旋转
+    ctx.save();
+    ctx.translate(player.x + 15, player.y + 15);
+    ctx.rotate(spinA);
+    ctx.fillStyle = 'rgba(255,0,80,0.3)'; ctx.fillRect(0, -6, 140, 12);
+    ctx.fillStyle = '#f27'; ctx.fillRect(0, -2, 140, 4);
+    ctx.restore();
   }
   escorts.forEach(g => drawPlane(g.x, g.y, '#4f4', false, 0.7));
   if (gunOn) { ctx.fillStyle = '#0ff'; ctx.fillRect(player.x - 4, player.y + 6, 8, 10); ctx.fillRect(player.x + 26, player.y + 6, 8, 10); } // 两翼机炮炮管
