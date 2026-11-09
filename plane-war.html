@@ -6,12 +6,62 @@
 <style>
   body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
   canvas { background: #050818; }
+  #naming { position: fixed; inset: 0; z-index: 1; background: rgba(5,8,24,0.96); color: #fff; font: 16px sans-serif; }
+  #naming:not([hidden]) { display: flex; justify-content: center; align-items: center; }
+  #naming form { width: 280px; text-align: center; }
+  #naming h1 { font-size: 26px; }
+  #naming p { color: #aac; }
+  #naming label { display: block; margin: 12px 0; text-align: left; }
+  #naming input { display: block; box-sizing: border-box; width: 100%; margin-top: 5px; padding: 8px; border: 1px solid #587; border-radius: 4px; background: #101a30; color: #fff; font-size: 16px; }
+  #naming button { width: 100%; margin-top: 10px; padding: 10px; border: 0; border-radius: 4px; background: #345; color: #fff; font-size: 16px; cursor: pointer; }
+  #naming button:disabled { background: #222; color: #666; cursor: default; }
+  #nameError { min-height: 20px; color: #f88; }
 </style>
 </head>
 <body>
 <canvas id="c" width="400" height="600"></canvas>
+<div id="naming" hidden>
+  <form id="nameForm">
+    <h1>出战准备</h1>
+    <p>游戏加载中，请先为主角战斗机和护卫机取名</p>
+    <label>主角战斗机<input id="playerName" maxlength="10" placeholder="请输入名字" required></label>
+    <label>护卫机 1<input id="escortName0" maxlength="10" placeholder="请输入名字" required></label>
+    <label>护卫机 2<input id="escortName1" maxlength="10" placeholder="请输入名字" required></label>
+    <label>护卫机 3<input id="escortName2" maxlength="10" placeholder="请输入名字" required></label>
+    <label>护卫机 4<input id="escortName3" maxlength="10" placeholder="请输入名字" required></label>
+    <div id="nameError"></div>
+    <button id="startNamedGame" type="submit" disabled>进入游戏</button>
+  </form>
+</div>
 <script>
 const c = document.getElementById('c'), ctx = c.getContext('2d');
+const namePanel = document.getElementById('naming'), nameForm = document.getElementById('nameForm');
+const nameInputs = [...nameForm.querySelectorAll('input')], startNamedGame = document.getElementById('startNamedGame');
+let escortNames = Array(4).fill('');
+function updateNameForm() {
+  startNamedGame.disabled = nameInputs.some(input => !input.value.trim());
+}
+function showNaming() {
+  nameForm.reset();
+  document.getElementById('nameError').textContent = '';
+  updateNameForm();
+  namePanel.hidden = false;
+  nameInputs[0].focus();
+}
+nameInputs.forEach(input => input.addEventListener('input', updateNameForm));
+nameForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const names = nameInputs.map(input => input.value.trim());
+  if (names.some(name => !name)) {
+    document.getElementById('nameError').textContent = '请为主角战斗机和全部护卫机取名';
+    return;
+  }
+  player.name = names[0];
+  player.showName = false;
+  escortNames = names.slice(1);
+  namePanel.hidden = true;
+  startGame();
+});
 // 等比放大到窗口最大
 function fit() {
   const s = Math.min(innerWidth / 400, innerHeight / 600);
@@ -22,13 +72,15 @@ onresize = fit; fit();
 const keys = {};
 onkeydown = e => {
   if ((e.key === 'y' || e.key === 'Y') && !e.repeat) // Y 切换弹种,跳过未解锁的
-    do weapon = (weapon + 1) % 9; while ((weapon === 7 && !rail) || (weapon === 8 && !spinOwned));
+    do weapon = (weapon + 1) % 10; while ((weapon === 7 && !rail) || (weapon === 8 && !spinOwned));
   if (e.key === '+' || e.key === '=') espd = Math.min(espd + 0.2, 5); // 加号加速敌军
   if (e.key === '-' || e.key === '_') espd = Math.max(espd - 0.2, 0.2); // 减号减速敌军
   if ((e.key === 'u' || e.key === 'U') && !e.repeat && ultCd <= 0 && !over) { laser = 40; ultCd = ultHalf ? 150 : 300; } // U 大招
+  if ((e.key === 'g' || e.key === 'G') && !e.repeat && carpetOwned && carpetCd <= 0 && !over && !menu) triggerCarpet(); // G 全屏轰炸
+  if ((e.key === 'v' || e.key === 'V') && !e.repeat && !over) { aaOn = !aaOn; if (!aaOn) aaguns = []; } // V 开关防空炮
   if ((e.key === 'i' || e.key === 'I') && !e.repeat && !over && escorts.length < 4) // I 呼叫护卫机,缺几补几,最多4架
     for (let n = Math.min(2, 4 - escorts.length); n > 0; n--)
-      escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: (2 - n) * 9 });
+      spawnEscort((2 - n) * 9);
   if (e.key === '0' && !e.repeat && hasShield && !over) shieldOn = !shieldOn; // 0 开关护盾
   if (e.key === '1' && !e.repeat && hasDouble && !over) doubleOn = !doubleOn; // 1 开关积分双倍
   if (e.key === '2' && !e.repeat && hasGun && !over) gunOn = !gunOn; // 2 开关机炮
@@ -37,16 +89,19 @@ onkeydown = e => {
 };
 onkeyup = e => keys[e.key] = false;
 
-const player = { x: 185, y: 520, w: 30, h: 30, cd: 0 };
-let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], score = 0, kills = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, shopScroll = 0, ultHalf = false, hasShield = false, shieldOn = false, hasDouble = false, doubleOn = false, hasGun = false, gunOn = false, gunCd = 0, hasTime = false, timeFreeze = 0, spinA = 0;
+const player = { x: 185, y: 520, w: 30, h: 30, cd: 0, name: '', showName: false };
+let bullets = [], enemies = [], ebullets = [], booms = [], escorts = [], aaguns = [], allyHelis = [], allyBombers = [], score = 0, kills = 0, frame = 0, over = false, weapon = 0, hp = 30, inv = 90, espd = 1, laser = 0, ultCd = 0, intro = 60, entry = { x: 185, y: 650 }, menu = true, diff = 1, shop = false, shopScroll = 0, ultHalf = false, hasShield = false, shieldOn = false, hasDouble = false, doubleOn = false, hasGun = false, gunOn = false, gunCd = 0, hasTime = false, timeFreeze = 0, spinA = 0, carpetCd = 0, carpetFlash = 0, aaOn = true;
 // 积分:击杀得分实时累计,持久化到 localStorage;buffs 为商城购买的增益,开局生效后清空
 let points = +(localStorage.getItem('pw_points') || 0);
-let rail = +(localStorage.getItem('pw_rail') || 0); // 电磁炮是否已解锁(永久)
-let spinOwned = +(localStorage.getItem('pw_spin') || 0); // 旋转激光是否已解锁(永久)
-let escortLaser = +(localStorage.getItem('pw_escortlaser') || 0); // 护卫机发射激光是否已解锁(永久)
+let rail = 0; // 电磁炮是否已解锁(本局有效)
+let railUpgrade = 0; // 升级版电磁炮是否已解锁(本局有效)
+let spinOwned = 0; // 旋转激光是否已解锁(本局有效)
+let spinUpgrade = 0; // 升级版旋转激光是否已解锁(本局有效)
+let escortLaser = 0; // 护卫机发射激光是否已解锁(本局有效)
+let carpetOwned = 0; // 全屏轰炸是否已解锁(本局有效)
 const spinOn = () => spinOwned && weapon === 8; // 旋转激光弹种生效中
 let buffs = Object.assign({ hp: 0, ult: 0, escort: 0, shield: 0, double: 0, gun: 0, time: 0 }, JSON.parse(localStorage.getItem('pw_buffs') || '{}'));
-const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); localStorage.setItem('pw_rail', rail); localStorage.setItem('pw_spin', spinOwned); localStorage.setItem('pw_escortlaser', escortLaser); };
+const save = () => { localStorage.setItem('pw_points', points); localStorage.setItem('pw_buffs', JSON.stringify(buffs)); };
 // 商城商品:价格 + 购买效果
 const SHOP = [
   { name: '生命 +10', cost: 100, buy: () => buffs.hp++ },
@@ -59,18 +114,43 @@ const SHOP = [
   { name: '时间暂停 (按3触发)', cost: 10000, buy: () => buffs.time++ },
   { name: '旋转激光 (弹种)', cost: 1000, buy: () => spinOwned = 1 },
   { name: '护卫机发射激光', cost: 500, buy: () => escortLaser = 1 },
+  { name: '全屏轰炸 (按G)', cost: 1500, buy: () => carpetOwned = 1 },
+  { name: '升级版旋转激光', cost: 2000, buy: () => { spinOwned = 1; spinUpgrade = 1; } },
+  { name: '升级版电磁炮', cost: 500, buy: () => { rail = 1; railUpgrade = 1; } },
 ];
+// 大规模轰炸机编队:10 列 × 8 排,从屏幕外整队进入
+function spawnBomberWave(friendly) {
+  for (let row = 0; row < 8; row++) for (let col = 0; col < 10; col++) {
+    const x = 5 + col * 40;
+    if (friendly) allyBombers.push({ x, y: 620 + row * 40, w: 30, h: 30, bombCd: 60 });
+    else enemies.push({ x, y: -30 - row * 40, w: 30, h: 30, bomber: true, heli: false, v: (2 + Math.random() * 2) * espd * DIFFS[diff].spd * 0.9, gunCd: 0, gunBurst: 60, missileCd: 120, bombCd: 60 + Math.floor(Math.random() * 31) });
+  }
+}
 // 开局:清场 + 应用已购增益(增益消耗掉)
 function startGame() {
-  bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; score = 0; kills = 0; hp = 30 + buffs.hp * 10; laser = 0; ultCd = 0; ultHalf = buffs.ult > 0;
-  hasShield = buffs.shield > 0; shieldOn = false; hasDouble = buffs.double > 0; doubleOn = false; hasGun = buffs.gun > 0; gunOn = false; gunCd = 0; hasTime = buffs.time > 0; timeFreeze = 0; spinA = 0;
-  for (let n = Math.min(buffs.escort * 2, 4); n > 0; n--) escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd: n * 9 });
+  bullets = []; enemies = []; ebullets = []; booms = []; escorts = []; aaguns = []; allyHelis = []; allyBombers = []; score = 0; kills = 0; hp = 30 + buffs.hp * 10; laser = 0; ultCd = 0; ultHalf = buffs.ult > 0; player.showName = false;
+  hasShield = buffs.shield > 0; shieldOn = false; hasDouble = buffs.double > 0; doubleOn = false; hasGun = buffs.gun > 0; gunOn = false; gunCd = 0; hasTime = buffs.time > 0; timeFreeze = 0; spinA = 0; carpetCd = 0; carpetFlash = 0;
+  for (let n = Math.min(buffs.escort * 2, 4); n > 0; n--) spawnEscort(n * 9);
+  if (diff === 2 && Math.random() < 0.2) spawnBomberWave(false); // 困难模式:敌方每局 20% 概率出动大规模轰炸机
+  if (Math.random() < 0.5) spawnBomberWave(true); // 我方每局 50% 概率出动同规模轰炸机
   buffs = { hp: 0, ult: 0, escort: 0, shield: 0, double: 0, gun: 0, time: 0 }; save();
   shop = false; menu = false; over = false;
   startIntro();
 }
+// 本局结束:六项商品解锁失效,弹种恢复普通
+function endGame() {
+  over = true;
+  rail = 0; railUpgrade = 0; spinOwned = 0; spinUpgrade = 0; escortLaser = 0; carpetOwned = 0; weapon = 0;
+  save();
+}
 // 护卫机编队位:相对玩家的偏移
 const ESC_POS = [{ dx: -50, dy: 40 }, { dx: 50, dy: 40 }, { dx: -95, dy: 75 }, { dx: 95, dy: 75 }];
+// 护卫机使用独立的固定名字槽位,战损后补充也不会重名
+function spawnEscort(cd) {
+  const slot = [0, 1, 2, 3].find(i => !escorts.some(g => g.slot === i));
+  if (slot === undefined) return;
+  escorts.push({ x: player.x, y: player.y, w: 21, h: 21, cd, slot, name: escortNames[slot], showName: false });
+}
 // 难度:敌速倍率 + 开火概率 + 敌弹速度
 const DIFFS = [
   { name: '简单', spd: 0.7, fire: 0.004, bv: 3, kills: 200 },
@@ -88,9 +168,13 @@ function drawDiffButtons() {
   });
 }
 c.addEventListener('click', e => {
-  if (!menu && !over) return;
   const r = c.getBoundingClientRect();
   const mx = (e.clientX - r.left) * 400 / r.width, my = (e.clientY - r.top) * 600 / r.height;
+  if (!menu && !over) { // 游戏中点击主角或护卫机,切换对应名字的显示状态
+    const target = [player, ...escorts].find(p => mx >= p.x && mx <= p.x + p.w && my >= p.y && my <= p.y + p.h);
+    if (target) target.showName = !target.showName;
+    return;
+  }
   if (shop) { // 商城内:点商品购买,点返回回菜单
     if (mx >= 140 && mx <= 260 && my >= 520 && my <= 560) { shop = false; return; }
     SHOP.forEach((it, i) => {
@@ -103,7 +187,7 @@ c.addEventListener('click', e => {
   if (mx >= 140 && mx <= 260 && my >= 420 && my <= 464) { shop = true; menu = true; shopScroll = 0; return; }
   DIFFS.forEach((d, i) => {
     const bx = 40 + i * 110;
-    if (mx >= bx && mx <= bx + 100 && my >= 350 && my <= 394) { diff = i; startGame(); }
+    if (mx >= bx && mx <= bx + 100 && my >= 350 && my <= 394) { diff = i; showNaming(); }
   });
 });
 // 商城:滚轮滚动商品列表
@@ -118,7 +202,7 @@ const stars = Array.from({ length: 80 }, () => ({
   x: Math.random() * 400, y: Math.random() * 600,
   s: Math.random() * 2 + 0.5, v: Math.random() * 2 + 0.5
 }));
-const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹', '激光', '分裂弹', '电磁炮', '旋转激光'];
+const WEAPONS = ['普通子弹', '巡航导弹', '追踪导弹', '散射弹', '炸弹', '激光', '分裂弹', '电磁炮', '旋转激光', '航空炸弹'];
 // 发射弹种:返回冷却帧数,src 为发射源(玩家或护卫机)
 function fireWeapon(w, src) {
   const x = src.x, y = src.y;
@@ -128,8 +212,9 @@ function fireWeapon(w, src) {
   if (w === 4) { bullets.push({ x: x + 8, y: y, w: 14, h: 14, bomb: true, vx: (Math.random() - 0.5) * 6, vy: -(2 + Math.random() * 3) }); return 40; } // 炸弹
   if (w === 5) { const b = bullets.find(b => b.lz && b.owner === src); if (b) { b.x = x + 13; b.h = y; b.ttl = 2; } else bullets.push({ x: x + 13, y: 0, w: 4, h: y, lz: true, ttl: 2, owner: src }); return 0; } // 激光:持续刷新光束
   if (w === 6) { bullets.push({ x: x + 11, y: y, w: 8, h: 14, sp: true, t: 25 }); return 22; } // 分裂弹
-  if (w === 7) { bullets.push({ x: x + 11, y: y, w: 10, h: 30, rail: true }); return 30; } // 电磁炮
+  if (w === 7) { bullets.push({ x: x + 11, y: y, w: 10, h: 30, rail: true, railUp: railUpgrade }); return 30; } // 电磁炮
   if (w === 8) return 0; // 旋转激光:无子弹
+  if (w === 9) { bullets.push({ x: x + 8, y: y, w: 14, h: 14, bomb: true, aviation: true, vx: 0, vy: -5 }); return 40; } // 航空炸弹:直线攻击防空炮
   bullets.push({ x: x + 11, y: y, w: 8, h: 20 }); return 10; // 普通子弹
 }
 
@@ -157,6 +242,81 @@ function drawPlane(x, y, color, down, sx, sy) {
   ctx.restore();
 }
 
+// 只有点击过的飞机才显示名字,名字放在机身正上方
+function drawPlaneName(p) {
+  if (!p.showName || !p.name) return;
+  const x = p.x + p.w / 2, y = Math.max(14, p.y - 8);
+  ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(x - ctx.measureText(p.name).width / 2 - 4, y - 12, ctx.measureText(p.name).width + 8, 16);
+  ctx.fillStyle = '#fff'; ctx.fillText(p.name, x, y);
+}
+
+// 阿帕奇风格直升机:军用机身、纵列座舱、短翼与机炮;up=true 时机头朝上
+function drawHeli(x, y, scale = 1, up = false) {
+  ctx.save();
+  ctx.translate(x + 15 * scale, y + 15 * scale);
+  ctx.scale(scale, scale);
+  if (up) ctx.rotate(Math.PI);
+  ctx.fillStyle = '#4b5320'; // 尾梁与尾翼
+  ctx.beginPath(); ctx.moveTo(-3, -4); ctx.lineTo(-2, -14); ctx.lineTo(2, -14); ctx.lineTo(3, -4); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(4, -11); ctx.lineTo(0, -11); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#596532'; // 两侧短翼
+  ctx.beginPath(); ctx.moveTo(-5, -1); ctx.lineTo(-14, 2); ctx.lineTo(-14, 6); ctx.lineTo(-5, 5); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(5, -1); ctx.lineTo(14, 2); ctx.lineTo(14, 6); ctx.lineTo(5, 5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#556b2f'; // 橄榄绿机身
+  ctx.beginPath(); ctx.moveTo(0, 12); ctx.lineTo(-5, 8); ctx.lineTo(-6, -4); ctx.lineTo(-3, -9); ctx.lineTo(3, -9); ctx.lineTo(6, -4); ctx.lineTo(5, 8); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#1d2b2b'; // 前后纵列座舱
+  ctx.beginPath(); ctx.moveTo(-3, -5); ctx.lineTo(3, -5); ctx.lineTo(4, 0); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-4, 2); ctx.lineTo(4, 2); ctx.lineTo(3, 7); ctx.lineTo(0, 9); ctx.lineTo(-3, 7); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#20251a'; ctx.fillRect(-2, 9, 4, 3); ctx.fillRect(-1, 11, 2, 4); // 机头下方机炮
+  ctx.save(); // 主旋翼旋转动画
+  ctx.translate(0, -1); ctx.rotate(frame * 0.35);
+  ctx.strokeStyle = '#a8ad96'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(14, 0); ctx.moveTo(0, -14); ctx.lineTo(0, 14); ctx.stroke();
+  ctx.restore();
+  ctx.save(); // 尾桨
+  ctx.translate(0, -12); ctx.rotate(-frame * 0.5);
+  ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(3, 0); ctx.moveTo(0, -3); ctx.lineTo(0, 3); ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+
+// 轰炸机:宽翼机身,保持 30x30 基础碰撞盒;up=true 时机头朝上
+function drawBomber(x, y, color = '#f80', up = false, scale = 1) {
+  ctx.save();
+  ctx.translate(x + 15 * scale, y + 15 * scale);
+  if (up) ctx.rotate(Math.PI);
+  ctx.scale(scale, scale);
+  ctx.translate(-x - 15, -y - 15);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x + 15, y); ctx.lineTo(x + 21, y + 8); ctx.lineTo(x + 21, y + 13);
+  ctx.lineTo(x + 30, y + 20); ctx.lineTo(x + 30, y + 25); ctx.lineTo(x + 20, y + 22);
+  ctx.lineTo(x + 20, y + 27); ctx.lineTo(x + 25, y + 30); ctx.lineTo(x + 5, y + 30);
+  ctx.lineTo(x + 10, y + 27); ctx.lineTo(x + 10, y + 22); ctx.lineTo(x, y + 25);
+  ctx.lineTo(x, y + 20); ctx.lineTo(x + 9, y + 13); ctx.lineTo(x + 9, y + 8);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#752'; ctx.fillRect(x + 12, y + 6, 6, 10);
+  ctx.restore();
+}
+
+// 我方防空炮:绿色底座 + 青色炮管
+function drawAagun(x, y) {
+  ctx.fillStyle = '#173'; ctx.fillRect(x, y + 24, 30, 6);
+  ctx.fillStyle = '#4f4'; ctx.fillRect(x + 4, y + 16, 22, 10);
+  ctx.fillStyle = '#0ff'; ctx.fillRect(x + 12, y, 6, 18);
+  ctx.fillStyle = '#aff'; ctx.fillRect(x + 9, y + 12, 12, 8);
+}
+
+// 敌方防空炮:红色底座 + 橙色炮管
+function drawEnemyAagun(x, y) {
+  ctx.fillStyle = '#511'; ctx.fillRect(x, y + 24, 30, 6);
+  ctx.fillStyle = '#f44'; ctx.fillRect(x + 4, y + 16, 22, 10);
+  ctx.fillStyle = '#f80'; ctx.fillRect(x + 12, y, 6, 18);
+  ctx.fillStyle = '#fc4'; ctx.fillRect(x + 9, y + 12, 12, 8);
+}
+
 // 入场:随机从左、右、下三个方向飞入
 function startIntro() {
   intro = 60; inv = 90;
@@ -170,17 +330,47 @@ function hit(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
+function drawHudText(text, x, y) {
+  let cx = x;
+  for (const ch of text) {
+    const w = ctx.measureText(ch).width;
+    const r = { x: cx, y: y - 16, w, h: 16 };
+    if (!hit(r, player) && !escorts.some(e => hit(r, e)) && !allyHelis.some(e => hit(r, e)) && !allyBombers.some(e => hit(r, e)) && !enemies.some(e => hit(r, e))) ctx.fillText(ch, cx, y);
+    cx += w;
+  }
+}
+
 // 击杀计分:积分双倍开启时得分与积分都翻倍
 function gain(s, p) { score += doubleOn ? s * 2 : s; points += doubleOn ? p * 2 : p; save(); }
-// 击杀普通敌机:计分并累计,达到阈值召唤 BOSS
-function killEnemy() {
-  gain(10, 10);
+// 击杀普通敌机:按机型与难度计分并累计,达到阈值召唤 BOSS
+function killEnemy(e) {
+  const reward = e.heli ? 5 : diff === 2 ? 20 : 10;
+  gain(reward, reward);
   kills++;
 }
-// BOSS 血量随难度与得分增长
+// 摧毁 BOSS:大型战斗机/轰炸机奖励 20000,原 BOSS 奖励 5000
+function killBoss(e) {
+  const reward = e.bossKind ? 20000 : 5000;
+  gain(reward, reward);
+  kills = 0;
+}
+// 全屏轰炸:清除敌弹、普通敌机与敌方防空炮,BOSS 受到 100 点伤害;不影响我方防空炮
+function triggerCarpet() {
+  carpetCd = 600; carpetFlash = 30; ebullets = [];
+  enemies = enemies.filter(e => {
+    if (!e.boss) { killEnemy(e); return false; }
+    e.hp -= 100;
+    if (e.hp <= 0) { killBoss(e); return false; }
+    return true;
+  });
+}
+// BOSS 血量随难度与得分增长;普通/困难各有 20% 大型战斗机或大型轰炸机
 function spawnBoss() {
   const hp = 30 + diff * 30 + Math.floor(score / 5);
-  enemies.push({ x: 100, y: -90, w: 90, h: 90, boss: true, hp, maxHp: hp, fc: 40, seed: Math.random() * 10 });
+  const r = Math.random();
+  const bossKind = diff > 0 && r < 0.2 ? 'fighter' : diff > 0 && r < 0.4 ? 'bomber' : '';
+  const size = bossKind ? 120 : 90;
+  enemies.push({ x: 200 - size / 2, y: -size, w: size, h: size, boss: true, bossKind, hp, maxHp: hp, fc: 40, gunCd: 0, bombCd: 30, missileCd: 180, seed: Math.random() * 10 });
 }
 
 function loop() {
@@ -233,6 +423,7 @@ function loop() {
     requestAnimationFrame(loop); return;
   }
   frame++;
+  carpetCd--;
 
   // 玩家移动与射击(入场动画期间不可操控)
   if (intro <= 0) {
@@ -265,11 +456,52 @@ function loop() {
     bullets.push({ x: player.x - 4, y: player.y + 10, w: 8, h: 20 });  // 左翼
     bullets.push({ x: player.x + 26, y: player.y + 10, w: 8, h: 20 }); // 右翼
   }
-  if (spinOn()) spinA += 0.06; // 旋转激光:持续绕机旋转
+  if (spinOn()) spinA += spinUpgrade ? 0.12 : 0.06; // 旋转激光:持续绕机旋转
 
-  // 生成敌机
-  if (timeFreeze <= 0 && frame % 40 === 0 && !enemies.some(e => e.boss))
-    enemies.push({ x: Math.random() * 370, y: -30, w: 30, h: 30, v: (2 + Math.random() * 2) * espd * DIFFS[diff].spd });
+  // 生成敌机:15% 轰炸机、25% 直升机、60% 战斗机
+  if (timeFreeze <= 0 && frame % 40 === 0 && !enemies.some(e => e.boss)) {
+    const r = Math.random(), bomber = r < 0.15, heli = r >= 0.15 && r < 0.40;
+    enemies.push({ x: Math.random() * 370, y: -30, w: 30, h: 30, bomber, heli, v: (2 + Math.random() * 2) * espd * DIFFS[diff].spd * (heli ? 0.5 : bomber ? 0.9 : 1), gunCd: 0, gunBurst: 60, missileCd: 120 + Math.floor(Math.random() * 61), bombCd: 60 + Math.floor(Math.random() * 31) });
+  }
+  // 敌方防空炮:仅困难模式出现,最多三座,随机部署在太空,只攻击我方飞机
+  if (diff === 2 && timeFreeze <= 0 && enemies.filter(e => e.aaGun).length < 3 && Math.random() < 0.003)
+    enemies.push({ x: 20 + Math.random() * 340, y: 120 + Math.random() * 180, w: 30, h: 30, aaGun: true, cd: 0 });
+  // 防空炮:最多三座,自动向最近敌机发射直线炮弹;时间暂停时仍可攻击
+  if (aaOn && aaguns.length < 3 && Math.random() < 0.003) aaguns.push({ x: 20 + Math.random() * 330, y: 220 + Math.random() * 320, w: 30, h: 30, hp: 3, cd: 0 });
+  aaguns.forEach(a => {
+    let t = null, d = 1e9;
+    enemies.forEach(e => { if (e.aaGun) return; const dd = (e.x + e.w / 2 - a.x - 15) ** 2 + (e.y + e.h / 2 - a.y - 15) ** 2; if (dd < d) { d = dd; t = e; } });
+    if (t && --a.cd <= 0) {
+      a.cd = 30;
+      const angle = Math.atan2(t.y + t.h / 2 - a.y - 15, t.x + t.w / 2 - a.x - 15);
+      bullets.push({ x: a.x + 12, y: a.y + 12, w: 6, h: 6, aa: true, vx: Math.cos(angle) * 8, vy: Math.sin(angle) * 8 });
+    }
+  });
+  // 独立的我方阿帕奇:随机出现在太空,缓慢向上飞行并自动射击,最多三架
+  if (allyHelis.length < 3 && Math.random() < 0.002) allyHelis.push({ x: 20 + Math.random() * 340, y: 180 + Math.random() * 300, w: 30, h: 30, cd: 0 });
+  allyHelis.forEach(h => {
+    h.y -= 0.35;
+    if (intro <= 0 && enemies.length && --h.cd <= 0) {
+      h.cd = 18;
+      bullets.push({ x: h.x + 11, y: h.y - 20, w: 8, h: 20 });
+    }
+  });
+  allyHelis = allyHelis.filter(h => h.y > -30);
+  // 我方轰炸机:最多两架,只向敌方防空炮投下直线飞行的航空炸弹
+  if (allyBombers.length < 2 && Math.random() < 0.002) allyBombers.push({ x: 20 + Math.random() * 340, y: 300 + Math.random() * 200, w: 30, h: 30, bombCd: 60 });
+  allyBombers.forEach(b => {
+    b.y -= 0.55;
+    let t = null, d = 1e9;
+    enemies.forEach(e => { if (!e.aaGun) return; const dd = (e.x - b.x) ** 2 + (e.y - b.y) ** 2; if (dd < d) { d = dd; t = e; } });
+    if (t) {
+      b.x += Math.max(-0.5, Math.min(0.5, t.x - b.x));
+      if (intro <= 0 && t.y + t.h < b.y && Math.abs(t.x - b.x) < 20 && --b.bombCd <= 0) {
+        b.bombCd = 90;
+        bullets.push({ x: b.x + 8, y: b.y - 14, w: 14, h: 14, bomb: true, aviation: true, vx: 0, vy: -5 });
+      }
+    }
+  });
+  allyBombers = allyBombers.filter(b => b.y > -30);
 
   // 移动与碰撞
   bullets.forEach(b => {
@@ -302,25 +534,115 @@ function loop() {
   });
   enemies.forEach(e => {
     if (timeFreeze > 0) return; // 时间暂停:敌机冻结
-    if (e.boss) { // BOSS 进场到 y=80 后左右摆动,三连发
+    if (e.boss) { // BOSS 进场到 y=80 后左右摆动
       e.y = Math.min(e.y + 2, 80);
       e.x += Math.sin(frame * 0.03 + e.seed) * 2;
       e.x = Math.max(0, Math.min(400 - e.w, e.x));
-      if (intro <= 0 && --e.fc <= 0) {
+      if (intro <= 0 && e.bossKind === 'fighter') { // 大型战斗机:七路弹幕 + 少量直射导弹
+        if (--e.fc <= 0) {
+          e.fc = 18;
+          [-0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6].forEach(a => ebullets.push({ x: e.x + e.w / 2 - 4, y: e.y + e.h, w: 8, h: 20, vx: Math.sin(a) * DIFFS[diff].bv, vy: Math.cos(a) * DIFFS[diff].bv }));
+        }
+        if (--e.missileCd <= 0) {
+          e.missileCd = 180;
+          ebullets.push({ x: e.x + e.w / 2 - 5, y: e.y + e.h, w: 10, h: 24, missile: true, vy: DIFFS[diff].bv + 2, damage: 2 });
+        }
+      } else if (intro <= 0 && e.bossKind === 'bomber') { // 大型轰炸机:双机炮、三枚投弹 + 少量直射导弹
+        if (--e.gunCd <= 0) {
+          e.gunCd = 8;
+          [e.x + 20, e.x + e.w - 28].forEach(x => ebullets.push({ x, y: e.y + e.h - 10, w: 8, h: 20 }));
+        }
+        if (--e.bombCd <= 0) {
+          e.bombCd = 35;
+          [-30, 0, 30].forEach(dx => ebullets.push({ x: e.x + e.w / 2 - 7 + dx, y: e.y + e.h, w: 14, h: 20, bossBomb: true, vy: DIFFS[diff].bv + 1, damage: 1 }));
+        }
+        if (--e.missileCd <= 0) {
+          e.missileCd = 180;
+          ebullets.push({ x: e.x + e.w / 2 - 5, y: e.y + e.h, w: 10, h: 24, missile: true, vy: DIFFS[diff].bv + 2, damage: 2 });
+        }
+      } else if (intro <= 0 && --e.fc <= 0) { // 原 BOSS:三连发
         e.fc = Math.max(20, 45 - diff * 10);
         [-0.3, 0, 0.3].forEach(a => ebullets.push({ x: e.x + e.w / 2 + a * 40, y: e.y + e.h, w: 8, h: 20 }));
       }
       return;
     }
+    if (e.aaGun) { // 敌方防空炮只瞄准我方飞机,不攻击我方防空炮
+      if (intro <= 0) {
+        const targets = [player, ...escorts, ...allyHelis, ...allyBombers];
+        let t = null, d = 1e9;
+        targets.forEach(a => { const dd = (a.x - e.x) ** 2 + (a.y - e.y) ** 2; if (dd < d) { d = dd; t = a; } });
+        if (t && --e.cd <= 0) {
+          e.cd = 40;
+          const angle = Math.atan2(t.y + t.h / 2 - e.y - 15, t.x + t.w / 2 - e.x - 15);
+          ebullets.push({ x: e.x + 12, y: e.y + 12, w: 6, h: 6, enemyAa: true, vx: Math.cos(angle) * 6, vy: Math.sin(angle) * 6, damage: 1 });
+        }
+      }
+      return;
+    }
+    if (e.bomber) { // 轰炸机只轰炸防空炮,不发射普通子弹或导弹
+      e.y += e.v;
+      let t = null, d = 1e9;
+      aaguns.forEach(a => { const dd = (a.x - e.x) ** 2 + (a.y - e.y) ** 2; if (dd < d) { d = dd; t = a; } });
+      if (t) {
+        e.x += Math.max(-0.6, Math.min(0.6, t.x - e.x));
+        if (e.y + e.h < t.y && Math.abs(e.x - t.x) < 20 && --e.bombCd <= 0) {
+          e.bombCd = 90;
+          ebullets.push({ x: e.x + 10, y: e.y + 30, w: 10, h: 16, aaBomb: true, vy: DIFFS[diff].bv + 1, damage: 1 });
+        }
+      }
+      return;
+    }
     e.y += e.v;
-    if (intro <= 0 && Math.random() < DIFFS[diff].fire) ebullets.push({ x: e.x + 11, y: e.y + 30, w: 8, h: 20 }); // 随机发射普通子弹
+    if (intro <= 0) {
+      if (e.heli) { // 阿帕奇机炮:每架只射击 60 帧(1秒),打完不再发射机炮
+        if (e.gunBurst > 0) {
+          if (--e.gunCd <= 0) {
+            e.gunCd = 24;
+            ebullets.push({ x: e.x + 11, y: e.y + 30, w: 8, h: 20 });
+          }
+          e.gunBurst--;
+        }
+      } else if (Math.random() < DIFFS[diff].fire) ebullets.push({ x: e.x + 11, y: e.y + 30, w: 8, h: 20 }); // 战斗机保留随机普通子弹
+      if (e.heli || diff === 2) { // 直升机与困难战斗机:独立冷却直射导弹
+        if (--e.missileCd <= 0) {
+          e.missileCd = 120 + Math.floor(Math.random() * 61);
+          ebullets.push({ x: e.x + 10, y: e.y + 30, w: 10, h: 24, missile: true, vy: DIFFS[diff].bv + 2, damage: 2 });
+        }
+      }
+    }
   });
-  // 敌机子弹:向下飞,击中玩家扣血
-  if (timeFreeze <= 0) ebullets.forEach(b => b.y += DIFFS[diff].bv);
+  // 敌机子弹:普通子弹按难度速度,导弹竖直向下,防空炮弹按瞄准方向飞行
+  if (timeFreeze <= 0) ebullets.forEach(b => {
+    if (b.vx !== undefined) { b.x += b.vx; b.y += b.vy; }
+    else b.y += b.vy === undefined ? DIFFS[diff].bv : b.vy;
+  });
   ebullets = ebullets.filter(b => {
-    if (b.y > 640) return false;
+    if (b.y > 640 || b.y < -40 || b.x < -40 || b.x > 440) return false;
+    if (b.enemyAa) { // 敌方防空炮弹只伤害我方飞机
+      if (timeFreeze > 0) return true;
+      if (hit(b, player)) {
+        if (inv <= 0 && intro <= 0 && !shieldOn) { hp = Math.max(0, hp - (b.damage || 1)); if (hp <= 0) endGame(); else startIntro(); }
+        return false;
+      }
+      const gi = escorts.findIndex(g => hit(b, g));
+      if (gi >= 0) { escorts.splice(gi, 1); return false; }
+      const hi = allyHelis.findIndex(h => hit(b, h));
+      if (hi >= 0) { allyHelis.splice(hi, 1); return false; }
+      const bi = allyBombers.findIndex(a => hit(b, a));
+      if (bi >= 0) { allyBombers.splice(bi, 1); return false; }
+      return true;
+    }
+    if (b.aaBomb) { // 轰炸机炸弹只伤害防空炮,绝不检测玩家
+      if (timeFreeze > 0) return true;
+      const ai = aaguns.findIndex(a => hit(b, a));
+      if (ai >= 0) {
+        if (--aaguns[ai].hp <= 0) aaguns.splice(ai, 1);
+        return false;
+      }
+      return true;
+    }
     if (hit(b, player)) {
-      if (inv <= 0 && intro <= 0 && !shieldOn) { hp--; if (hp <= 0) over = true; else startIntro(); }
+      if (inv <= 0 && intro <= 0 && !shieldOn) { hp = Math.max(0, hp - (b.damage || 1)); if (hp <= 0) endGame(); else startIntro(); }
       return false;
     }
     return true;
@@ -328,18 +650,27 @@ function loop() {
   bullets = bullets.filter(b => b.lz ? b.ttl > 0 : !b.gone && b.y > -40 && b.y < 640 && b.x > -40 && b.x < 440);
   enemies = enemies.filter(e => {
     if (e.y > 600) return false;
-    const bi = bullets.findIndex(b => hit(b, e));
+    if (e.aaGun) { // 除全屏轰炸外,防空炮免疫其他攻击,仅航空炸弹直接命中可摧毁
+      const bi = bullets.findIndex(b => b.aviation && hit(b, e));
+      if (bi < 0) return true;
+      bullets.splice(bi, 1);
+      booms.push({ x: e.x + 15, y: e.y + 15, r: 80, t: 18, t0: 18, groundOnly: true });
+      killEnemy(e);
+      return false;
+    }
+    const bi = bullets.findIndex(b => !b.aviation && hit(b, e)); // 普通炸弹可攻击飞机;航空炸弹只攻击防空炮
     if (bi >= 0) {
       const b = bullets[bi];
+      if (b.rail && b.railUp) booms.push({ x: e.x + e.w / 2, y: e.y + e.h / 2, r: 100, t: 12, t0: 12 }); // 升级版电磁炮:命中爆炸
       if (!b.lz && !b.rail) bullets.splice(bi, 1); // 激光/电磁炮贯穿,不消耗
       if (e.boss) { // BOSS 扣血不死,重武器伤害更高
         e.hp -= b.rail ? 20 : b.bomb ? 12 : b.m ? 6 : 2;
-        if (e.hp <= 0) { booms.push({ x: e.x + e.w / 2, y: e.y + e.h / 2, r: 120, t: 24, t0: 24 }); gain(5000, 5000); kills = 0; return false; }
+        if (e.hp <= 0) { booms.push({ x: e.x + e.w / 2, y: e.y + e.h / 2, r: 120, t: 24, t0: 24 }); killBoss(e); return false; }
         return true;
       }
       if (b.m) booms.push({ x: e.x + 15, y: e.y + 15, r: 90, t: 12, t0: 12 });
-      else if (b.bomb) booms.push({ x: e.x + 15, y: e.y + 15, r: 150, t: 18, t0: 18 }); // 炸弹爆炸范围更大
-      killEnemy(); return false;
+      else if (b.bomb) booms.push({ x: e.x + 15, y: e.y + 15, r: 150, t: 18, t0: 18 }); // 普通炸弹:大范围攻击飞机
+      killEnemy(e); return false;
     }
     const gi = escorts.findIndex(g => hit(g, e));
     if (gi >= 0) { // 护卫机撞敌:同归于尽
@@ -347,19 +678,32 @@ function loop() {
       if (e.boss) { e.hp -= 5; return true; } // 撞 BOSS:自毁造成伤害
       return false;
     }
+    const hi = allyHelis.findIndex(h => hit(h, e));
+    if (hi >= 0) { // 独立阿帕奇撞敌:同归于尽
+      allyHelis.splice(hi, 1);
+      if (e.boss) { e.hp -= 5; return true; }
+      return false;
+    }
+    const ai = allyBombers.findIndex(b => hit(b, e));
+    if (ai >= 0) { // 我方轰炸机撞敌:同归于尽
+      allyBombers.splice(ai, 1);
+      if (e.boss) { e.hp -= 5; return true; }
+      return false;
+    }
     if (spinOn()) { // 旋转激光:敌机中心到光束线段的距离小于半径即命中
+      const range = spinUpgrade ? 220 : 140;
       const cx = player.x + 15, cy = player.y + 15, dx = Math.cos(spinA), dy = Math.sin(spinA);
       const ex = e.x + e.w / 2, ey = e.y + e.h / 2;
-      const t = Math.max(0, Math.min(140, (ex - cx) * dx + (ey - cy) * dy)); // 投影到线段上
+      const t = Math.max(0, Math.min(range, (ex - cx) * dx + (ey - cy) * dy)); // 投影到线段上
       if (Math.hypot(ex - (cx + dx * t), ey - (cy + dy * t)) < 20) {
         if (e.boss) { e.hp -= 2; return true; } // 扫到 BOSS:持续扣血
-        killEnemy(); return false;
+        killEnemy(e); return false;
       }
     }
     if (hit(player, e)) {
       if (inv <= 0 && !shieldOn) {
         hp--;
-        if (hp <= 0) { over = true; } else { startIntro(); } // 扣血后翻滚入场,期间无敌
+        if (hp <= 0) { endGame(); } else { startIntro(); } // 扣血后翻滚入场,期间无敌
       }
       return e.boss; // BOSS 撞到玩家不消失
     }
@@ -369,8 +713,8 @@ function loop() {
   // 巡航导弹爆炸:范围杀伤
   booms.forEach(bm => {
     enemies = enemies.filter(e => {
-      if (e.boss) return true; // BOSS 不吃范围余波,已按直接命中扣血
-      if (Math.hypot(e.x + 15 - bm.x, e.y + 15 - bm.y) < bm.r) { killEnemy(); return false; }
+      if (e.boss || e.aaGun || bm.groundOnly) return true; // BOSS 与防空炮不吃余波;航空炸弹余波不伤飞机
+      if (Math.hypot(e.x + 15 - bm.x, e.y + 15 - bm.y) < bm.r) { killEnemy(e); return false; }
       return true;
     });
   });
@@ -381,9 +725,10 @@ function loop() {
     laser--;
     const bx1 = 400 * (1 - laser / 40), bx2 = 400 - bx1;
     enemies = enemies.filter(e => {
+      if (e.aaGun) return true; // 大招无法摧毁敌方防空炮
       if (Math.abs(e.x + e.w / 2 - bx1) < 50 || Math.abs(e.x + e.w / 2 - bx2) < 50) {
         if (e.boss) { e.hp -= 10; return true; } // 大招扫射 BOSS:持续高额扣血不死
-        killEnemy(); return false;
+        killEnemy(e); return false;
       }
       return true;
     });
@@ -423,17 +768,23 @@ function loop() {
     ctx.lineWidth = 1;
   }
   if (spinOn() && intro <= 0) { // 旋转激光:红色光束,绕机心旋转
+    const range = spinUpgrade ? 220 : 140;
     ctx.save();
     ctx.translate(player.x + 15, player.y + 15);
     ctx.rotate(spinA);
-    ctx.fillStyle = 'rgba(255,0,80,0.3)'; ctx.fillRect(0, -6, 140, 12);
-    ctx.fillStyle = '#f27'; ctx.fillRect(0, -2, 140, 4);
+    ctx.fillStyle = 'rgba(255,0,80,0.3)'; ctx.fillRect(0, -6, range, 12);
+    ctx.fillStyle = '#f27'; ctx.fillRect(0, -2, range, 4);
     ctx.restore();
   }
   escorts.forEach(g => drawPlane(g.x, g.y, '#4f4', false, 0.7));
+  drawPlaneName(player);
+  escorts.forEach(drawPlaneName);
   if (gunOn) { ctx.fillStyle = '#0ff'; ctx.fillRect(player.x - 4, player.y + 6, 8, 10); ctx.fillRect(player.x + 26, player.y + 6, 8, 10); } // 两翼机炮炮管
   bullets.forEach(b => {
-    if (b.sp) { // 分裂弹:紫色圆珠
+    if (b.aa) { // 防空炮弹:亮青色圆珠
+      ctx.fillStyle = '#8ff';
+      ctx.beginPath(); ctx.arc(b.x + 3, b.y + 3, 4, 0, 7); ctx.fill();
+    } else if (b.sp) { // 分裂弹:紫色圆珠
       ctx.fillStyle = '#c0f';
       ctx.beginPath(); ctx.arc(b.x + 4, b.y + 7, 7, 0, 7); ctx.fill();
     } else if (b.lz) { // 激光:青色光柱,越到末端越细
@@ -449,10 +800,22 @@ function loop() {
       ctx.fillStyle = '#0ff';
       ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(4, 6); ctx.lineTo(-4, 6); ctx.closePath(); ctx.fill();
       ctx.restore();
-    } else if (b.bomb) { // 炸弹:黑色圆球 + 火花引信
-      ctx.fillStyle = '#333';
-      ctx.beginPath(); ctx.arc(b.x + 7, b.y + 7, 8, 0, 7); ctx.fill();
-      ctx.fillStyle = '#ff0'; ctx.fillRect(b.x + 5, b.y - 5, 4, 5);
+    } else if (b.bomb) { // 航空炸弹:金属弹体、弹头、尾翼与高光
+      ctx.save();
+      ctx.translate(b.x + b.w / 2, b.y + b.h / 2);
+      ctx.rotate(Math.atan2(b.vy, b.vx) + Math.PI / 2);
+      ctx.fillStyle = '#252b32'; // 十字尾翼
+      ctx.beginPath();
+      ctx.moveTo(-4, 4); ctx.lineTo(-8, 11); ctx.lineTo(-2, 9); ctx.lineTo(0, 5);
+      ctx.lineTo(2, 9); ctx.lineTo(8, 11); ctx.lineTo(4, 4); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#59636e'; // 流线型弹体
+      ctx.beginPath();
+      ctx.moveTo(0, -12); ctx.bezierCurveTo(6, -8, 6, 1, 4, 7);
+      ctx.lineTo(-4, 7); ctx.bezierCurveTo(-6, 1, -6, -8, 0, -12); ctx.fill();
+      ctx.fillStyle = '#303840'; ctx.fillRect(-4, 3, 8, 3); // 尾部束带
+      ctx.fillStyle = '#aab4bd'; ctx.fillRect(-2, -6, 2, 8); // 金属高光
+      ctx.fillStyle = '#d8a928'; ctx.fillRect(-4, 1, 8, 2); // 黄色识别环
+      ctx.restore();
     } else if (b.rail) { // 电磁炮:蓝色贯穿光柱
       ctx.fillStyle = 'rgba(100,150,255,0.4)'; ctx.fillRect(b.x - 2, b.y, b.w + 4, b.h);
       ctx.fillStyle = '#5af'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -460,29 +823,63 @@ function loop() {
       ctx.fillStyle = '#ff0'; ctx.fillRect(b.x, b.y, b.w, b.h);
     }
   });
-  ctx.fillStyle = '#f6f';
-  ebullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+  ebullets.forEach(b => {
+    if (b.enemyAa) { // 敌方防空炮弹:橙红色圆珠
+      ctx.fillStyle = '#f84';
+      ctx.beginPath(); ctx.arc(b.x + 3, b.y + 3, 4, 0, 7); ctx.fill();
+    } else if (b.bossBomb) { // 大型轰炸机投弹:黑色弹体 + 橙色尾翼
+      ctx.fillStyle = '#222'; ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = '#fa0'; ctx.fillRect(b.x - 2, b.y, b.w + 4, 5);
+    } else if (b.aaBomb) { // 轰炸机炸弹:黑色弹体 + 橙色尾翼
+      ctx.fillStyle = '#222'; ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = '#fa0'; ctx.fillRect(b.x - 2, b.y, b.w + 4, 4);
+    } else if (b.missile) { // 敌方导弹:橙色弹体 + 红色弹头
+      ctx.fillStyle = '#f80'; ctx.fillRect(b.x, b.y, b.w, b.h - 6);
+      ctx.fillStyle = '#f44';
+      ctx.beginPath(); ctx.moveTo(b.x, b.y + b.h - 6); ctx.lineTo(b.x + b.w / 2, b.y + b.h); ctx.lineTo(b.x + b.w, b.y + b.h - 6); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillStyle = '#f6f'; ctx.fillRect(b.x, b.y, b.w, b.h);
+    }
+  });
   booms = booms.filter(bm => bm.t-- > 0);
   ctx.strokeStyle = '#fa0';
   booms.forEach(bm => { ctx.beginPath(); ctx.arc(bm.x, bm.y, bm.r * (1 - bm.t / bm.t0), 0, 7); ctx.stroke(); });
+  aaguns.forEach(a => drawAagun(a.x, a.y));
+  allyHelis.forEach(h => drawHeli(h.x, h.y, 1, true));
+  allyBombers.forEach(b => drawBomber(b.x, b.y, '#4f4', true));
   enemies.forEach(e => {
-    if (e.boss) { // BOSS:放大三倍 + 血条
-      drawPlane(e.x + e.w / 2 - 15, e.y + e.h / 2 - 15, '#f22', true, e.w / 30);
+    if (e.boss) { // BOSS:大型战斗机/轰炸机为 120x120,原 BOSS 为 90x90
+      if (e.bossKind === 'bomber') drawBomber(e.x, e.y, '#f80', false, e.w / 30);
+      else drawPlane(e.x + e.w / 2 - 15, e.y + e.h / 2 - 15, '#f22', true, e.w / 30);
       ctx.fillStyle = '#333'; ctx.fillRect(e.x, e.y - 16, e.w, 8);
       ctx.fillStyle = '#f44'; ctx.fillRect(e.x, e.y - 16, e.w * Math.max(0, e.hp) / e.maxHp, 8);
-    } else drawPlane(e.x, e.y, '#f44', true);
+    } else if (e.aaGun) drawEnemyAagun(e.x, e.y);
+    else if (e.bomber) drawBomber(e.x, e.y);
+    else if (e.heli) drawHeli(e.x, e.y);
+    else drawPlane(e.x, e.y, '#f44', true);
   });
+  if (carpetFlash > 0) { // 全屏轰炸:橙黄闪光与扩散冲击环,HUD 在其后绘制
+    const p = 1 - carpetFlash / 30;
+    ctx.fillStyle = `rgba(255,180,0,${0.22 * carpetFlash / 30})`;
+    ctx.fillRect(0, 0, 400, 600);
+    ctx.strokeStyle = `rgba(255,230,100,${carpetFlash / 30})`;
+    ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(200, 300, 40 + p * 420, 0, 7); ctx.stroke();
+    ctx.lineWidth = 1; carpetFlash--;
+  }
   ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('得分: ' + score, 10, 25);
-  ctx.fillText('弹种: ' + WEAPONS[weapon] + ' (按Y切换)', 10, 45);
-  ctx.fillText('敌速: x' + espd.toFixed(1) + ' (按+/-调整)', 10, 65);
-  ctx.fillText(ultCd > 0 ? '大招冷却: ' + Math.ceil(ultCd / 60) + '秒' : '大招就绪 (按U)', 10, 85);
-  ctx.fillText('难度: ' + DIFFS[diff].name, 10, 105);
-  ctx.fillText('BOSS: ' + Math.min(kills, DIFFS[diff].kills) + '/' + DIFFS[diff].kills, 10, 125);
-  if (hasShield) ctx.fillText('护盾: ' + (shieldOn ? '开' : '关') + ' (按0切换)', 10, 145);
-  if (hasDouble) ctx.fillText('积分双倍: ' + (doubleOn ? '开' : '关') + ' (按1切换)', 10, 165);
-  if (hasGun) ctx.fillText('机炮: ' + (gunOn ? '开' : '关') + ' (按2切换)', 10, 185);
-  if (hasTime) ctx.fillText('时间暂停: ' + (timeFreeze > 0 ? '冻结中' : '关') + ' (按3开关)', 10, 205);
+  drawHudText('得分: ' + score, 10, 25);
+  drawHudText('弹种: ' + WEAPONS[weapon] + ' (按Y切换)', 10, 45);
+  drawHudText('敌速: x' + espd.toFixed(1) + ' (按+/-调整)', 10, 65);
+  drawHudText(ultCd > 0 ? '大招冷却: ' + Math.ceil(ultCd / 60) + '秒' : '大招就绪 (按U)', 10, 85);
+  drawHudText('难度: ' + DIFFS[diff].name, 10, 105);
+  drawHudText('BOSS: ' + Math.min(kills, DIFFS[diff].kills) + '/' + DIFFS[diff].kills, 10, 125);
+  if (hasShield) drawHudText('护盾: ' + (shieldOn ? '开' : '关') + ' (按0切换)', 10, 145);
+  if (hasDouble) drawHudText('积分双倍: ' + (doubleOn ? '开' : '关') + ' (按1切换)', 10, 165);
+  if (hasGun) drawHudText('机炮: ' + (gunOn ? '开' : '关') + ' (按2切换)', 10, 185);
+  if (hasTime) drawHudText('时间暂停: ' + (timeFreeze > 0 ? '冻结中' : '关') + ' (按3开关)', 10, 205);
+  if (carpetOwned) drawHudText(carpetCd > 0 ? '全屏轰炸冷却: ' + Math.ceil(carpetCd / 60) + '秒' : '全屏轰炸就绪 (按G)', 10, 225);
+  drawHudText('防空炮: ' + (aaOn ? '开' : '关') + ' (按V切换)', 10, 245);
   ctx.textAlign = 'right';
   ctx.fillStyle = '#fa0'; ctx.fillText('☀'.repeat(Math.floor(hp / 10)), 390, 25);
   ctx.fillStyle = '#f44'; ctx.fillText('♥'.repeat(hp % 10), 390 - ctx.measureText('☀'.repeat(Math.floor(hp / 10))).width, 25);
